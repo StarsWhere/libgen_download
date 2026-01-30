@@ -3,7 +3,8 @@ import csv
 from pathlib import Path
 from threading import Event
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QSettings, QUrl
+from PyQt6.QtGui import QDesktopServices, QAction, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -25,6 +26,8 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QSplitter,
+    QGroupBox,
+    QMenu,
 )
 
 from libgen_download import smart_search, download_for_result, DownloadError
@@ -389,6 +392,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Libgen GUI 下载器")
+        self.settings = QSettings("Roo", "LibgenGUI")
         self.results = []
         self.download_queue = []
         self.current_download_thread = None
@@ -396,75 +400,127 @@ class MainWindow(QMainWindow):
         self.queue_tasks = []
 
         self._build_ui()
+        self._apply_style()
+        self._load_settings()
+
+    def _apply_style(self):
+        self.setStyleSheet("""
+            QMainWindow { background-color: #2b2b2b; color: #efefef; }
+            QGroupBox { font-weight: bold; border: 1px solid #555; border-radius: 6px; margin-top: 15px; padding-top: 15px; color: #aaa; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
+            QLabel { color: #efefef; }
+            QPushButton { padding: 6px 15px; border-radius: 4px; background-color: #444; border: 1px solid #666; color: #efefef; min-height: 20px; }
+            QPushButton:hover { background-color: #555; border-color: #888; }
+            QPushButton:pressed { background-color: #333; }
+            QPushButton#search_btn { background-color: #0078d4; color: white; border: none; font-weight: bold; }
+            QPushButton#search_btn:hover { background-color: #0086f0; }
+            QPushButton#search_btn:disabled { background-color: #555; color: #888; }
+            QLineEdit, QSpinBox { padding: 5px; border: 1px solid #555; border-radius: 4px; background-color: #3c3f41; color: #efefef; selection-background-color: #0078d4; }
+            QLineEdit:focus { border-color: #0078d4; }
+            QTableWidget { background-color: #2b2b2b; border: 1px solid #555; gridline-color: #444; color: #efefef; selection-background-color: #004a8d; }
+            QHeaderView::section { background-color: #3c3f41; padding: 6px; border: 1px solid #555; color: #aaa; }
+            QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; background-color: #3c3f41; color: white; }
+            QProgressBar::chunk { background-color: #28a745; width: 10px; }
+            QTextEdit { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', 'Monaco', monospace; border: 1px solid #555; }
+            QScrollBar:vertical { border: none; background: #2b2b2b; width: 10px; margin: 0px; }
+            QScrollBar::handle:vertical { background: #555; min-height: 20px; border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
 
     def _build_ui(self):
         central = QWidget()
         self.setAcceptDrops(True)
         layout = QVBoxLayout()
+        layout.setSpacing(10)
 
-        # 搜索行
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("关键词"))
+        # 搜索分组
+        search_group = QGroupBox("搜索参数")
+        search_grid = QGridLayout()
+        search_grid.setSpacing(10)
+        
+        search_grid.addWidget(QLabel("关键词:"), 0, 0)
         self.query_edit = QLineEdit()
-        search_row.addWidget(self.query_edit)
+        search_grid.addWidget(self.query_edit, 0, 1, 1, 3)
 
-        search_row.addWidget(QLabel("语言"))
+        search_grid.addWidget(QLabel("语言:"), 0, 4)
         self.lang_edit = QLineEdit()
-        self.lang_edit.setPlaceholderText("如 English / Chinese")
-        search_row.addWidget(self.lang_edit)
+        self.lang_edit.setPlaceholderText("English / Chinese")
+        search_grid.addWidget(self.lang_edit, 0, 5)
 
-        search_row.addWidget(QLabel("格式"))
+        search_grid.addWidget(QLabel("格式:"), 0, 6)
         self.ext_edit = QLineEdit()
         self.ext_edit.setPlaceholderText("pdf / epub")
-        search_row.addWidget(self.ext_edit)
+        search_grid.addWidget(self.ext_edit, 0, 7)
 
-        search_row.addWidget(QLabel("年份≥"))
+        search_grid.addWidget(QLabel("年份范围:"), 1, 0)
+        year_layout = QHBoxLayout()
         self.year_min_edit = QLineEdit()
-        self.year_min_edit.setFixedWidth(60)
-        search_row.addWidget(self.year_min_edit)
-
-        search_row.addWidget(QLabel("年份≤"))
+        self.year_min_edit.setPlaceholderText("最小")
         self.year_max_edit = QLineEdit()
-        self.year_max_edit.setFixedWidth(60)
-        search_row.addWidget(self.year_max_edit)
+        self.year_max_edit.setPlaceholderText("最大")
+        year_layout.addWidget(self.year_min_edit)
+        year_layout.addWidget(QLabel("-"))
+        year_layout.addWidget(self.year_max_edit)
+        search_grid.addLayout(year_layout, 1, 1)
 
-        search_row.addWidget(QLabel("返回条数"))
+        search_grid.addWidget(QLabel("返回条数:"), 1, 2)
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 200)
         self.limit_spin.setValue(25)
-        search_row.addWidget(self.limit_spin)
+        search_grid.addWidget(self.limit_spin, 1, 3)
 
         self.search_btn = QPushButton("搜索")
+        self.search_btn.setObjectName("search_btn")
+        self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.search_btn.clicked.connect(self.start_search)
-        search_row.addWidget(self.search_btn)
+        search_grid.addWidget(self.search_btn, 1, 4, 1, 4)
 
-        layout.addLayout(search_row)
+        search_group.setLayout(search_grid)
+        layout.addWidget(search_group)
 
-        # 下载目录 + 按钮区
-        path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("下载目录"))
-        self.dir_edit = QLineEdit(str(Path.cwd() / "downloads"))
-        path_row.addWidget(self.dir_edit)
+        # 下载设置分组
+        config_group = QGroupBox("下载设置")
+        config_layout = QHBoxLayout()
+        config_layout.setSpacing(10)
+        
+        config_layout.addWidget(QLabel("下载目录:"))
+        self.dir_edit = QLineEdit()
+        config_layout.addWidget(self.dir_edit, 1)
+        
         choose_btn = QPushButton("选择目录")
         choose_btn.clicked.connect(self.choose_directory)
-        path_row.addWidget(choose_btn)
+        config_layout.addWidget(choose_btn)
 
+        open_dir_btn = QPushButton("打开目录")
+        open_dir_btn.clicked.connect(self.open_download_directory)
+        config_layout.addWidget(open_dir_btn)
+
+        self.csv_btn = QPushButton("导入 CSV")
+        self.csv_btn.clicked.connect(self.import_csv)
+        config_layout.addWidget(self.csv_btn)
+
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
+        # 操作按钮行
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
         self.download_btn = QPushButton("下载所选")
         self.download_btn.clicked.connect(self.start_download_selected)
         self.download_btn.setEnabled(False)
-        path_row.addWidget(self.download_btn)
+        action_row.addWidget(self.download_btn)
 
         self.cancel_btn = QPushButton("取消当前下载")
         self.cancel_btn.clicked.connect(self.cancel_download)
         self.cancel_btn.setEnabled(False)
-        path_row.addWidget(self.cancel_btn)
+        action_row.addWidget(self.cancel_btn)
 
-        # CSV 导入按钮
-        self.csv_btn = QPushButton("导入 CSV")
-        self.csv_btn.clicked.connect(self.import_csv)
-        path_row.addWidget(self.csv_btn)
-
-        layout.addLayout(path_row)
+        self.clear_queue_btn = QPushButton("清除已完成")
+        self.clear_queue_btn.clicked.connect(self.clear_finished_tasks)
+        action_row.addWidget(self.clear_queue_btn)
+        
+        action_row.addStretch()
+        layout.addLayout(action_row)
 
         # 分隔器：上方搜索结果，下方队列/日志
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -474,6 +530,10 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(["标题", "作者", "出版社", "年份", "语言", "格式", "大小"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.table.setSortingEnabled(True)
+        self.table.doubleClicked.connect(self.start_download_selected)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_table_context_menu)
         splitter.addWidget(self.table)
 
         # 下载队列表
@@ -481,6 +541,8 @@ class MainWindow(QMainWindow):
         self.queue_table.setHorizontalHeaderLabels(["关键词", "语言", "格式", "年≥", "年≤", "状态", "信息"])
         self.queue_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.queue_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.queue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.queue_table.customContextMenuRequested.connect(self.show_queue_context_menu)
         splitter.addWidget(self.queue_table)
 
         # 进度 + 日志区域
@@ -514,6 +576,55 @@ class MainWindow(QMainWindow):
         if path:
             self.dir_edit.setText(path)
 
+    def open_download_directory(self):
+        path = self.dir_edit.text().strip()
+        if Path(path).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            QMessageBox.warning(self, "提示", "目录不存在")
+
+    def _load_settings(self):
+        self.dir_edit.setText(self.settings.value("download_dir", str(Path.cwd() / "downloads")))
+        self.lang_edit.setText(self.settings.value("last_lang", ""))
+        self.ext_edit.setText(self.settings.value("last_ext", ""))
+
+    def _save_settings(self):
+        self.settings.setValue("download_dir", self.dir_edit.text())
+        self.settings.setValue("last_lang", self.lang_edit.text())
+        self.settings.setValue("last_ext", self.ext_edit.text())
+
+    def clear_finished_tasks(self):
+        for i in range(self.queue_table.rowCount() - 1, -1, -1):
+            status = self.queue_table.item(i, 5).text()
+            if status in ["成功", "失败", "已取消"]:
+                self.queue_table.removeRow(i)
+
+    def show_table_context_menu(self, pos):
+        menu = QMenu()
+        download_act = menu.addAction("下载所选")
+        copy_title_act = menu.addAction("复制标题")
+        
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == download_act:
+            self.start_download_selected()
+        elif action == copy_title_act:
+            selected = self.table.selectedItems()
+            if selected:
+                # 标题在第0列
+                row = selected[0].row()
+                title = self.table.item(row, 0).text()
+                QApplication.clipboard().setText(title)
+
+    def show_queue_context_menu(self, pos):
+        menu = QMenu()
+        remove_act = menu.addAction("从队列移除")
+        
+        action = menu.exec(self.queue_table.viewport().mapToGlobal(pos))
+        if action == remove_act:
+            rows = {index.row() for index in self.queue_table.selectedIndexes()}
+            for r in sorted(rows, reverse=True):
+                self.queue_table.removeRow(r)
+
     # --- 搜索 ---
     def start_search(self):
         query = self.query_edit.text().strip()
@@ -523,6 +634,7 @@ class MainWindow(QMainWindow):
 
         self.search_btn.setEnabled(False)
         self.append_log(f"开始搜索：{query}")
+        self._save_settings()
 
         year_min = self._safe_int(self.year_min_edit.text())
         year_max = self._safe_int(self.year_max_edit.text())
