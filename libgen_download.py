@@ -323,7 +323,15 @@ def build_filename_from_result(result):
         base = md5 or "download"
 
     filename = f"{base}.{ext}"
-    return clean_filename(filename)
+    filename = clean_filename(filename)
+
+    # 控制总长度：若超过 150，则直接退回搜索关键词（或 md5）作为标题，避免冗长路径
+    max_len = 150
+    if len(filename) > max_len:
+        fallback_title = clean_field(result.get("_fallback_title") or "") or (md5[:12] if md5 else "download")
+        filename = clean_filename(f"{fallback_title}.{ext}")
+
+    return filename
 
 
 def download_file_from_get_url(
