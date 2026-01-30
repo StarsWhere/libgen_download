@@ -29,6 +29,13 @@ pip install -r requirements.txt
 主要依赖库：
 - `requests`: 处理网络请求。
 - `beautifulsoup4`: 解析 HTML 页面。
+- `PyQt6`: 图形界面（仅 GUI 版需要）。
+
+### 3. 启动图形界面（可选）
+```bash
+python libgen_gui.py
+```
+GUI 版提供搜索表单、结果表格、多选下载、下载队列、进度条与日志视图，并将任务放到后台线程，确保界面流畅。支持拖拽或按钮导入 CSV，预览前 100 行并映射列（关键词/语言/格式/年份），验证后可批量入队下载。
 
 ## 快速上手
 

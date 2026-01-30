@@ -1,0 +1,25 @@
+# Python 缓存与编译文件
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env/
+
+# 下载目录（运行脚本产生的文件）
+downloads/
+*.csv
+
+# 日志文件
+*.log
+
+# 编辑器配置文件
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
