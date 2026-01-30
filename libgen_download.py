@@ -360,9 +360,23 @@ def download_file_from_get_url(
     out_path = Path(out_dir)
     tmp_root = Path(temp_dir) if temp_dir else out_path / ".partial"
     tmp_root.mkdir(parents=True, exist_ok=True)
+    fname = clean_filename(target_name)
+    temp_path = tmp_root / f"{fname}.part"
+    final_path = out_path / fname
     for attempt in range(1, max_retries + 1):
         try:
-            resp = SESSION.get(get_url, stream=True, allow_redirects=True, timeout=timeout)
+            offset = temp_path.stat().st_size if temp_path.exists() else 0
+            headers = {}
+            if offset > 0:
+                headers["Range"] = f"bytes={offset}-"
+
+            resp = SESSION.get(
+                get_url,
+                stream=True,
+                allow_redirects=True,
+                timeout=timeout,
+                headers=headers or None,
+            )
             status = resp.status_code
 
             if status >= 500:
@@ -373,22 +387,39 @@ def download_file_from_get_url(
                 # 4xx 客户端错误，不再重试
                 raise requests.HTTPError(f"Client error: {status}", response=resp)
 
-            fname = clean_filename(target_name)
-
             os.makedirs(out_dir, exist_ok=True)
-            final_path = out_path / fname
-            temp_path = tmp_root / f"{uuid.uuid4().hex}.part"
 
-            total = resp.headers.get("Content-Length")
-            try:
-                total = int(total) if total else None
-            except ValueError:
-                total = None
+            total = None
+            if "Content-Range" in resp.headers:
+                # bytes start-end/total
+                m = re.search(r"bytes\\s+(\\d+)-(\\d+)/(\\d+)", resp.headers["Content-Range"])
+                if m:
+                    start, end, full = map(int, m.groups())
+                    total = full
+                    offset = start  # align
+            else:
+                total = resp.headers.get("Content-Length")
+                try:
+                    total = int(total) if total else None
+                except ValueError:
+                    total = None
+
+            # 如果服务器不支持 Range 且返回 200，重置临时文件
+            if offset > 0 and status == 200:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                offset = 0
+
+            mode = "ab" if offset > 0 else "wb"
 
             downloaded = 0
 
             try:
-                with open(temp_path, "wb") as f:
+                with open(temp_path, mode) as f:
+                    if offset:
+                        downloaded = offset
                     for chunk in resp.iter_content(chunk_size=8192):
                         if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
                             raise DownloadError("下载已被取消")
@@ -403,8 +434,10 @@ def download_file_from_get_url(
                 ext = Path(fname).suffix or ".bin"
                 alt_name = f"{short_base}{ext}"
                 final_path = out_path / alt_name
-                temp_path = tmp_root / f"{uuid.uuid4().hex}.part"
-                with open(temp_path, "wb") as f:
+                temp_path = tmp_root / f"{alt_name}.part"
+                with open(temp_path, mode) as f:
+                    if offset:
+                        downloaded = offset
                     for chunk in resp.iter_content(chunk_size=8192):
                         if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
                             raise DownloadError("下载已被取消")
@@ -430,12 +463,14 @@ def download_file_from_get_url(
             break
         except DownloadError as e:
             last_exc = e
-            for p in [locals().get("temp_path"), locals().get("final_path")]:
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
+            if cancel_event or stop_event:
+                # 取消时清理临时
+                for p in [locals().get("temp_path"), locals().get("final_path")]:
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
             break
 
     raise DownloadError(f"下载失败（GET: {get_url}）：{last_exc}")
