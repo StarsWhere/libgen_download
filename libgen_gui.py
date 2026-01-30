@@ -1,6 +1,7 @@
 import sys
 import csv
 from pathlib import Path
+from datetime import datetime
 from threading import Event
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QSettings, QUrl
@@ -651,7 +652,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有搜索结果可导出")
             return
         
-        path, _ = QFileDialog.getSaveFileName(self, "导出搜索结果", "", "CSV Files (*.csv)")
+        query = self.query_edit.text().strip() or "search_results"
+        out_dir = Path(self.dir_edit.text().strip() or "downloads")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        default_path = str(out_dir / f"{query}.csv")
+
+        path, _ = QFileDialog.getSaveFileName(self, "导出搜索结果", default_path, "CSV Files (*.csv)")
         if path:
             try:
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
@@ -672,7 +678,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "下载队列为空")
             return
         
-        path, _ = QFileDialog.getSaveFileName(self, "导出下载队列", "", "CSV Files (*.csv)")
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = Path(self.dir_edit.text().strip() or "downloads")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        default_path = str(out_dir / f"queue_{now_str}.csv")
+
+        path, _ = QFileDialog.getSaveFileName(self, "导出下载队列", default_path, "CSV Files (*.csv)")
         if path:
             try:
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
