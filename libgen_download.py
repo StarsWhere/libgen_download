@@ -5,6 +5,8 @@ import re
 import unicodedata
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
+import uuid
+import shutil
 
 import requests
 from bs4 import BeautifulSoup
@@ -344,6 +346,7 @@ def download_file_from_get_url(
     progress_cb=None,
     cancel_event: Event | None = None,
     stop_event: Event | None = None,
+    temp_dir=None,
 ):
     """
     针对一个 get.php/download 链接，带重试逻辑：
@@ -353,6 +356,9 @@ def download_file_from_get_url(
     """
     last_exc = None
     target_name = filename or "download.bin"
+    out_path = Path(out_dir)
+    tmp_root = Path(temp_dir) if temp_dir else out_path / ".partial"
+    tmp_root.mkdir(parents=True, exist_ok=True)
     for attempt in range(1, max_retries + 1):
         try:
             resp = SESSION.get(get_url, stream=True, allow_redirects=True, timeout=timeout)
@@ -369,7 +375,8 @@ def download_file_from_get_url(
             fname = clean_filename(target_name)
 
             os.makedirs(out_dir, exist_ok=True)
-            path = os.path.join(out_dir, fname)
+            final_path = out_path / fname
+            temp_path = tmp_root / f"{uuid.uuid4().hex}.part"
 
             total = resp.headers.get("Content-Length")
             try:
@@ -380,7 +387,7 @@ def download_file_from_get_url(
             downloaded = 0
 
             try:
-                with open(path, "wb") as f:
+                with open(temp_path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
                         if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
                             raise DownloadError("下载已被取消")
@@ -394,8 +401,9 @@ def download_file_from_get_url(
                 short_base = clean_filename(Path(fname).stem)[:80] or "download"
                 ext = Path(fname).suffix or ".bin"
                 alt_name = f"{short_base}{ext}"
-                path = os.path.join(out_dir, alt_name)
-                with open(path, "wb") as f:
+                final_path = out_path / alt_name
+                temp_path = tmp_root / f"{uuid.uuid4().hex}.part"
+                with open(temp_path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
                         if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
                             raise DownloadError("下载已被取消")
@@ -404,8 +412,14 @@ def download_file_from_get_url(
                             downloaded += len(chunk)
                             if progress_cb:
                                 progress_cb(downloaded, total)
+            # 写完再原子移动到最终位置
+            try:
+                shutil.move(str(temp_path), str(final_path))
+            except Exception:
+                # 如果移动失败，尝试替换
+                os.replace(temp_path, final_path)
 
-            return path
+            return str(final_path)
 
         except (requests.Timeout, requests.ConnectionError) as e:
             last_exc = e
@@ -415,11 +429,12 @@ def download_file_from_get_url(
             break
         except DownloadError as e:
             last_exc = e
-            if "path" in locals() and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+            for p in [locals().get("temp_path"), locals().get("final_path")]:
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
             break
 
     raise DownloadError(f"下载失败（GET: {get_url}）：{last_exc}")
@@ -491,6 +506,7 @@ def download_for_result(
 
         _log(f"[*] 解析到下载链接: {get_url}", logger=logger)
         try:
+            temp_root = Path(out_dir) / ".partial"
             path = download_file_from_get_url(
                 get_url,
                 out_dir=out_dir,
@@ -500,6 +516,7 @@ def download_for_result(
                 progress_cb=progress_cb,
                 cancel_event=cancel_event,
                 stop_event=None,
+                temp_dir=temp_root,
             )
             if not validate_file(path):
                 _log("[!] 下载文件校验失败，尝试其他镜像", level="warning", logger=logger)
