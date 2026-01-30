@@ -524,6 +524,14 @@ class MainWindow(QMainWindow):
         self.clear_queue_btn = QPushButton("清除已完成")
         self.clear_queue_btn.clicked.connect(self.clear_finished_tasks)
         action_row.addWidget(self.clear_queue_btn)
+
+        self.export_results_btn = QPushButton("导出搜索结果")
+        self.export_results_btn.clicked.connect(self.export_results_csv)
+        action_row.addWidget(self.export_results_btn)
+
+        self.export_queue_btn = QPushButton("导出下载队列")
+        self.export_queue_btn.clicked.connect(self.export_queue_csv)
+        action_row.addWidget(self.export_queue_btn)
         
         action_row.addStretch()
         layout.addLayout(action_row)
@@ -637,6 +645,48 @@ class MainWindow(QMainWindow):
             rows = {index.row() for index in self.queue_table.selectedIndexes()}
             for r in sorted(rows, reverse=True):
                 self.queue_table.removeRow(r)
+
+    def export_results_csv(self):
+        if self.table.rowCount() == 0:
+            QMessageBox.information(self, "提示", "没有搜索结果可导出")
+            return
+        
+        path, _ = QFileDialog.getSaveFileName(self, "导出搜索结果", "", "CSV Files (*.csv)")
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f)
+                    # 写入表头
+                    headers = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+                    writer.writerow(headers)
+                    # 写入内容
+                    for row in range(self.table.rowCount()):
+                        row_data = [self.table.item(row, col).text() if self.table.item(row, col) else "" for col in range(self.table.columnCount())]
+                        writer.writerow(row_data)
+                QMessageBox.information(self, "成功", f"搜索结果已导出到：\n{path}")
+            except Exception as e:
+                QMessageBox.critical(self, "导出失败", f"导出出错：{e}")
+
+    def export_queue_csv(self):
+        if self.queue_table.rowCount() == 0:
+            QMessageBox.information(self, "提示", "下载队列为空")
+            return
+        
+        path, _ = QFileDialog.getSaveFileName(self, "导出下载队列", "", "CSV Files (*.csv)")
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f)
+                    # 写入表头
+                    headers = [self.queue_table.horizontalHeaderItem(i).text() for i in range(self.queue_table.columnCount())]
+                    writer.writerow(headers)
+                    # 写入内容
+                    for row in range(self.queue_table.rowCount()):
+                        row_data = [self.queue_table.item(row, col).text() if self.queue_table.item(row, col) else "" for col in range(self.queue_table.columnCount())]
+                        writer.writerow(row_data)
+                QMessageBox.information(self, "成功", f"下载队列已导出到：\n{path}")
+            except Exception as e:
+                QMessageBox.critical(self, "导出失败", f"导出出错：{e}")
 
     # --- 搜索 ---
     def start_search(self):
