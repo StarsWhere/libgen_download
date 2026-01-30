@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
+from threading import Event
 
 
 # 搜索主站域名：改成你自己的入口（现在用的是示例）
@@ -17,6 +18,18 @@ SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (compatible; LibgenScript/1.0)",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 })
+
+
+# 轻量日志分发：优先调用传入的 logger/回调，否则退回 print。
+def _log(message, level="info", logger=None):
+    if logger:
+        try:
+            logger(level, message)
+            return
+        except Exception:
+            # 防御性：即便 logger 出错也不影响主流程
+            pass
+    print(message)
 
 
 class DownloadError(Exception):
@@ -205,7 +218,6 @@ def clean_filename(name, max_length=150):
     """
     清洗文件名（特别针对 Windows）：
     - Unicode 规范化
-    - 去掉非法字符 < > : " / \ | ? *
     - 去掉控制字符
     - 截断过长文件名
     """
@@ -293,7 +305,16 @@ def build_filename_from_result(result):
     return clean_filename(filename)
 
 
-def download_file_from_get_url(get_url, out_dir=".", filename=None, max_retries=3, timeout=60):
+def download_file_from_get_url(
+    get_url,
+    out_dir=".",
+    filename=None,
+    max_retries=3,
+    timeout=60,
+    logger=None,
+    progress_cb=None,
+    cancel_event: Event | None = None,
+):
     """
     针对一个 get.php/download 链接，带重试逻辑：
     - 网络错误/超时：自动重试
@@ -320,11 +341,24 @@ def download_file_from_get_url(get_url, out_dir=".", filename=None, max_retries=
             os.makedirs(out_dir, exist_ok=True)
             path = os.path.join(out_dir, fname)
 
+            total = resp.headers.get("Content-Length")
+            try:
+                total = int(total) if total else None
+            except ValueError:
+                total = None
+
+            downloaded = 0
+
             try:
                 with open(path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
+                        if cancel_event and cancel_event.is_set():
+                            raise DownloadError("用户取消下载")
                         if chunk:
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_cb:
+                                progress_cb(downloaded, total)
             except OSError:
                 # 如果因为文件名问题报错，尝试使用 md5 作为文件名
                 md5_name = "download.bin"
@@ -336,8 +370,13 @@ def download_file_from_get_url(get_url, out_dir=".", filename=None, max_retries=
                 path = os.path.join(out_dir, clean_filename(md5_name))
                 with open(path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
+                        if cancel_event and cancel_event.is_set():
+                            raise DownloadError("用户取消下载")
                         if chunk:
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_cb:
+                                progress_cb(downloaded, total)
 
             return path
 
@@ -351,7 +390,15 @@ def download_file_from_get_url(get_url, out_dir=".", filename=None, max_retries=
     raise DownloadError(f"下载失败（GET: {get_url}）：{last_exc}")
 
 
-def download_for_result(result, out_dir=".", max_entry_urls=5, max_get_retries=3):
+def download_for_result(
+    result,
+    out_dir=".",
+    max_entry_urls=5,
+    max_get_retries=3,
+    logger=None,
+    progress_cb=None,
+    cancel_event: Event | None = None,
+):
     """
     针对单个搜索结果：
     - 先按顺序尝试多个入口（ads_url + mirrors）
@@ -359,7 +406,7 @@ def download_for_result(result, out_dir=".", max_entry_urls=5, max_get_retries=3
     - 全部失败则抛 DownloadError
     """
     filename = build_filename_from_result(result)
-    print(f"[*] 计划保存文件名: {filename}")
+    _log(f"[*] 计划保存文件名: {filename}", logger=logger)
 
     candidate_urls = []
     if result.get("ads_url"):
@@ -373,30 +420,33 @@ def download_for_result(result, out_dir=".", max_entry_urls=5, max_get_retries=3
 
     last_err = None
     for i, entry_url in enumerate(candidate_urls[:max_entry_urls]):
-        print(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}")
+        _log(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}", logger=logger)
         try:
             get_url = fetch_download_link_from_page(entry_url)
         except requests.RequestException as e:
-            print(f"[!] 打开入口页失败: {e}")
+            _log(f"[!] 打开入口页失败: {e}", level="error", logger=logger)
             last_err = e
             continue
 
         if not get_url:
-            print("[!] 在入口页中没有找到 get/download 链接，尝试下一个入口")
+            _log("[!] 在入口页中没有找到 get/download 链接，尝试下一个入口", level="warning", logger=logger)
             continue
 
-        print(f"[*] 解析到下载链接: {get_url}")
+        _log(f"[*] 解析到下载链接: {get_url}", logger=logger)
         try:
             path = download_file_from_get_url(
                 get_url,
                 out_dir=out_dir,
                 filename=filename,
                 max_retries=max_get_retries,
+                logger=logger,
+                progress_cb=progress_cb,
+                cancel_event=cancel_event,
             )
-            print(f"[+] 使用入口 {entry_url} 下载成功")
+            _log(f"[+] 使用入口 {entry_url} 下载成功", level="success", logger=logger)
             return path
         except DownloadError as e:
-            print(f"[!] 使用入口 {entry_url} 下载失败: {e}")
+            _log(f"[!] 使用入口 {entry_url} 下载失败: {e}", level="error", logger=logger)
             last_err = e
             continue
 
@@ -439,7 +489,7 @@ def filter_results(results, language=None, ext=None, year_min=None, year_max=Non
 def smart_search(query, limit=25, columns=None, objects=None, topics=None,
                  order=None, ordermode=None, filesuns="all",
                  language=None, ext=None, year_min=None, year_max=None,
-                 fallback_level=0):
+                 fallback_level=0, logger=None):
     """
     智能搜索：如果当前参数组合没有结果，则尝试减少过滤条件。
     fallback_level:
@@ -448,7 +498,10 @@ def smart_search(query, limit=25, columns=None, objects=None, topics=None,
     2: 忽略扩展名限制
     3: 忽略语言限制
     """
-    print(f"[*] 尝试搜索: '{query}' (Level {fallback_level}) | 语言={language}, 格式={ext}, 年份={year_min}-{year_max}")
+    _log(
+        f"[*] 尝试搜索: '{query}' (Level {fallback_level}) | 语言={language}, 格式={ext}, 年份={year_min}-{year_max}",
+        logger=logger,
+    )
     
     try:
         results = search(
@@ -462,7 +515,7 @@ def smart_search(query, limit=25, columns=None, objects=None, topics=None,
             filesuns=filesuns,
         )
     except requests.RequestException as e:
-        print(f"[!] 搜索请求失败: {e}")
+        _log(f"[!] 搜索请求失败: {e}", level="error", logger=logger)
         return []
 
     if not results:
@@ -478,24 +531,25 @@ def smart_search(query, limit=25, columns=None, objects=None, topics=None,
     )
 
     if not filtered and fallback_level < 3:
-        print(f"[!] Level {fallback_level} 无结果，尝试降低过滤要求...")
+        _log(f"[!] Level {fallback_level} 无结果，尝试降低过滤要求...", level="warning", logger=logger)
         if fallback_level == 0:
             # 降级 1: 忽略年份
             return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
-                                language, ext, None, None, fallback_level + 1)
+                                language, ext, None, None, fallback_level + 1, logger=logger)
         elif fallback_level == 1:
             # 降级 2: 忽略扩展名
             return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
-                                language, None, None, None, fallback_level + 2)
+                                language, None, None, None, fallback_level + 2, logger=logger)
         elif fallback_level == 2:
             # 降级 3: 忽略语言
             return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
-                                None, None, None, None, fallback_level + 3)
+                                None, None, None, None, fallback_level + 3, logger=logger)
 
     return filtered
 
 
-def process_single_item(query, args, language=None, ext=None, year_min=None, year_max=None):
+def process_single_item(query, args, language=None, ext=None, year_min=None, year_max=None, logger=None,
+                       progress_cb=None, cancel_event: Event | None = None):
     """处理单个条目的搜索与下载逻辑"""
     filtered = smart_search(
         query,
@@ -510,10 +564,11 @@ def process_single_item(query, args, language=None, ext=None, year_min=None, yea
         ext=ext or args.ext,
         year_min=year_min or args.year_min,
         year_max=year_max or args.year_max,
+        logger=logger,
     )
 
     if not filtered:
-        print(f"[!] '{query}' 最终未找到匹配结果")
+        _log(f"[!] '{query}' 最终未找到匹配结果", level="warning", logger=logger)
         return False
 
     # 候选结果顺序：先用户指定，再依次尝试其他结果
@@ -530,18 +585,21 @@ def process_single_item(query, args, language=None, ext=None, year_min=None, yea
         # 当解析出来的标题为空时，在结果对象中写入搜索关键词，供文件名构建时兜底使用
         if not (chosen.get("title") or "").strip():
             chosen["_fallback_title"] = query
-        print(f"[*] 尝试第 {pos+1} 个候选结果: {chosen['title']}")
+        _log(f"[*] 尝试第 {pos+1} 个候选结果: {chosen['title']}", logger=logger)
         try:
             path = download_for_result(
                 chosen,
                 out_dir=args.out_dir,
                 max_entry_urls=args.max_entry_urls,
                 max_get_retries=args.max_retries,
+                logger=logger,
+                progress_cb=progress_cb,
+                cancel_event=cancel_event,
             )
-            print(f"[+] 下载成功: {path}")
+            _log(f"[+] 下载成功: {path}", level="success", logger=logger)
             return True
         except DownloadError as e:
-            print(f"[!] 下载失败: {e}")
+            _log(f"[!] 下载失败: {e}", level="error", logger=logger)
             last_err = e
             continue
     return False
