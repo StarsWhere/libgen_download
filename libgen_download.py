@@ -1,4 +1,5 @@
 import argparse
+import csv
 import os
 import re
 import unicodedata
@@ -410,11 +411,126 @@ def filter_results(results, language=None, ext=None, year_min=None, year_max=Non
     return filtered
 
 
+def smart_search(query, limit=25, columns=None, objects=None, topics=None,
+                 order=None, ordermode=None, filesuns="all",
+                 language=None, ext=None, year_min=None, year_max=None,
+                 fallback_level=0):
+    """
+    智能搜索：如果当前参数组合没有结果，则尝试减少过滤条件。
+    fallback_level:
+    0: 原始参数
+    1: 忽略年份限制
+    2: 忽略扩展名限制
+    3: 忽略语言限制
+    """
+    print(f"[*] 尝试搜索: '{query}' (Level {fallback_level}) | 语言={language}, 格式={ext}, 年份={year_min}-{year_max}")
+    
+    try:
+        results = search(
+            query,
+            limit=limit,
+            columns=columns,
+            objects=objects,
+            topics=topics,
+            order=order,
+            ordermode=ordermode,
+            filesuns=filesuns,
+        )
+    except requests.RequestException as e:
+        print(f"[!] 搜索请求失败: {e}")
+        return []
+
+    if not results:
+        # 如果搜索本身就没结果，且 query 包含多个词，可以考虑简化 query，但这里先只处理过滤条件的 fallback
+        return []
+
+    filtered = filter_results(
+        results,
+        language=language,
+        ext=ext,
+        year_min=year_min,
+        year_max=year_max,
+    )
+
+    if not filtered and fallback_level < 3:
+        print(f"[!] Level {fallback_level} 无结果，尝试降低过滤要求...")
+        if fallback_level == 0:
+            # 降级 1: 忽略年份
+            return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
+                                language, ext, None, None, fallback_level + 1)
+        elif fallback_level == 1:
+            # 降级 2: 忽略扩展名
+            return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
+                                language, None, None, None, fallback_level + 2)
+        elif fallback_level == 2:
+            # 降级 3: 忽略语言
+            return smart_search(query, limit, columns, objects, topics, order, ordermode, filesuns,
+                                None, None, None, None, fallback_level + 3)
+
+    return filtered
+
+
+def process_single_item(query, args, language=None, ext=None, year_min=None, year_max=None):
+    """处理单个条目的搜索与下载逻辑"""
+    filtered = smart_search(
+        query,
+        limit=args.limit,
+        columns=args.columns,
+        objects=args.objects,
+        topics=args.topics,
+        order=args.order,
+        ordermode=args.ordermode,
+        filesuns=args.filesuns,
+        language=language or args.language,
+        ext=ext or args.ext,
+        year_min=year_min or args.year_min,
+        year_max=year_max or args.year_max,
+    )
+
+    if not filtered:
+        print(f"[!] '{query}' 最终未找到匹配结果")
+        return False
+
+    # 候选结果顺序：先用户指定，再依次尝试其他结果
+    idx = args.index
+    if idx < 0 or idx >= len(filtered):
+        idx = 0
+        
+    candidate_indices = [idx] + [i for i in range(len(filtered)) if i != idx]
+    candidate_indices = candidate_indices[:args.max_fallback_results]
+
+    last_err = None
+    for pos, i in enumerate(candidate_indices):
+        chosen = filtered[i]
+        print(f"[*] 尝试第 {pos+1} 个候选结果: {chosen['title']}")
+        try:
+            path = download_for_result(
+                chosen,
+                out_dir=args.out_dir,
+                max_entry_urls=args.max_entry_urls,
+                max_get_retries=args.max_retries,
+            )
+            print(f"[+] 下载成功: {path}")
+            return True
+        except DownloadError as e:
+            print(f"[!] 下载失败: {e}")
+            last_err = e
+            continue
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="从 dev1.example.test 搜索并下载文件的小脚本（支持多参数与容错下载）"
+        description="从 Libgen 搜索并下载文件的小脚本（支持 CSV 批量下载与智能回退）"
     )
-    parser.add_argument("query", help="搜索关键词（例如：我们为什么要睡觉）")
+    parser.add_argument("query", nargs="?", help="搜索关键词（如果不使用 --csv）")
+    parser.add_argument("--csv", help="CSV 文件路径，用于批量下载")
+    parser.add_argument("--col-query", default="书名", help="CSV 中作为搜索关键词的列名，默认 '书名'")
+    parser.add_argument("--col-language", help="CSV 中作为语言筛选的列名")
+    parser.add_argument("--col-ext", default="类型", help="CSV 中作为扩展名筛选的列名，默认 '类型'")
+    parser.add_argument("--col-year-min", help="CSV 中作为年份最小值的列名")
+    parser.add_argument("--col-year-max", help="CSV 中作为年份最大值的列名")
+
     parser.add_argument("-n", "--index", type=int, default=0,
                         help="选择第几条结果作为优先下载目标（从 0 开始，默认 0）")
     parser.add_argument("-o", "--out-dir", default="downloads",
@@ -490,83 +606,39 @@ def main():
             "https": args.proxy,
         })
 
-    try:
-        results = search(
-            args.query,
-            limit=args.limit,
-            columns=args.columns,
-            objects=args.objects,
-            topics=args.topics,
-            order=args.order,
-            ordermode=args.ordermode,
-            filesuns=args.filesuns,
-        )
-    except requests.RequestException as e:
-        print(f"[!] 搜索请求失败: {e}")
-        return
-
-    if not results:
-        print("[!] 搜索没有返回任何结果")
-        return
-
-    print(f"[*] 搜索结果总数: {len(results)} 条")
-
-    filtered = filter_results(
-        results,
-        language=args.language,
-        ext=args.ext,
-        year_min=args.year_min,
-        year_max=args.year_max,
-    )
-
-    if not filtered:
-        print("[!] 筛选后结果为空，请放宽 language/ext/year 条件重试")
-        return
-
-    if len(filtered) != len(results):
-        print(f"[*] 筛选后剩余 {len(filtered)} 条结果")
-
-    print("[*] 展示前 10 条筛选后的结果：")
-    for i, r in enumerate(filtered[:10]):
-        print(f"{i:2d}. {r['title']}")
-        print(f"    作者: {r['author']} | 出版社: {r['publisher']} | 年份: {r['year']} | 语言: {r['language']} | 大小: {r['size']} | 格式: {r['extension']}")
-        if r.get("md5"):
-            print(f"    md5: {r['md5']}")
-        print()
-
-    idx = args.index
-    if idx < 0 or idx >= len(filtered):
-        print(f"[!] 指定 index={idx} 不在筛选结果范围 0..{len(filtered)-1}")
-        return
-
-    # 候选结果顺序：先用户指定，再依次尝试其他结果
-    candidate_indices = [idx] + [i for i in range(len(filtered)) if i != idx]
-    candidate_indices = candidate_indices[:args.max_fallback_results]
-
-    last_err = None
-    for pos, i in enumerate(candidate_indices):
-        chosen = filtered[i]
-        print(f"[*] 尝试第 {pos+1} 个候选结果（筛选后索引 {i}）: {chosen['title']}")
-        if not chosen.get("ads_url") and not chosen.get("mirrors"):
-            print("[!] 该结果没有任何下载入口链接（ads_url/mirrors），跳过")
-            continue
-        try:
-            path = download_for_result(
-                chosen,
-                out_dir=args.out_dir,
-                max_entry_urls=args.max_entry_urls,
-                max_get_retries=args.max_retries,
-            )
-            print(f"[+] 下载成功，文件保存在: {path}")
+    if args.csv:
+        if not os.path.exists(args.csv):
+            print(f"[!] CSV 文件不存在: {args.csv}")
             return
-        except DownloadError as e:
-            print(f"[!] 该结果下载失败: {e}")
-            last_err = e
-            continue
+        
+        with open(args.csv, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                query = row.get(args.col_query)
+                if not query:
+                    continue
+                
+                lang = row.get(args.col_language) if args.col_language else None
+                ext = row.get(args.col_ext) if args.col_ext else None
+                
+                y_min = None
+                if args.col_year_min and row.get(args.col_year_min):
+                    try: y_min = int(row[args.col_year_min])
+                    except: pass
+                
+                y_max = None
+                if args.col_year_max and row.get(args.col_year_max):
+                    try: y_max = int(row[args.col_year_max])
+                    except: pass
 
-    print("[!] 尝试了所有候选结果，仍然下载失败")
-    if last_err:
-        print(f"    最后一次错误信息: {last_err}")
+                print(f"\n{'='*40}")
+                print(f"[*] 正在处理: {query}")
+                process_single_item(query, args, language=lang, ext=ext, year_min=y_min, year_max=y_max)
+    else:
+        if not args.query:
+            parser.print_help()
+            return
+        process_single_item(args.query, args)
 
 
 if __name__ == "__main__":
