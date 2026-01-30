@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
 import uuid
 import shutil
+from http.client import IncompleteRead
 
 import requests
 from bs4 import BeautifulSoup
@@ -421,7 +422,7 @@ def download_file_from_get_url(
 
             return str(final_path)
 
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except (requests.Timeout, requests.ConnectionError, requests.ChunkedEncodingError, IncompleteRead) as e:
             last_exc = e
             continue
         except requests.HTTPError as e:

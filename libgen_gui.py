@@ -689,6 +689,13 @@ class MainWindow(QMainWindow):
         self.concurrent_spin.setFixedWidth(60)
         config_layout.addWidget(self.concurrent_spin)
 
+        config_layout.addWidget(QLabel("重试:"))
+        self.retry_spin = QSpinBox()
+        self.retry_spin.setRange(1, 10)
+        self.retry_spin.setValue(3)
+        self.retry_spin.setFixedWidth(60)
+        config_layout.addWidget(self.retry_spin)
+
         config_layout.addWidget(QLabel("提醒:"))
         self.notify_combo = QComboBox()
         self.notify_combo.addItem("轻提示：成功/失败", userData="toast_all")
@@ -803,6 +810,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.notify_combo.setCurrentIndex(idx)
         self.concurrent_spin.setValue(int(self.settings.value("concurrent_downloads", 2)))
+        self.retry_spin.setValue(int(self.settings.value("download_retries", 3)))
         self._apply_proxy()
 
     def _save_settings(self):
@@ -812,6 +820,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("proxy_url", self.proxy_edit.text())
         self.settings.setValue("notify_mode", self.notify_combo.currentData())
         self.settings.setValue("concurrent_downloads", self.concurrent_spin.value())
+        self.settings.setValue("download_retries", self.retry_spin.value())
 
     def _apply_proxy(self):
         from libgen_download import set_proxy
@@ -1011,6 +1020,7 @@ class MainWindow(QMainWindow):
                 task,
                 out_dir,
                 limit=self.limit_spin.value(),
+                max_retries=self.retry_spin.value(),
             )
             worker.moveToThread(thread)
 
