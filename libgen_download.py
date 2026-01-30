@@ -239,6 +239,9 @@ def build_filename_from_result(result):
     使用搜索结果构建文件名：
     书名-作者-出版社-年份-语言-页数-其他.扩展名
     优化：截断过长的字段，移除标题中括号内的冗余推广信息，并清理空白字符。
+
+    特别处理：
+    - 如果解析到的标题为空，则尝试使用搜索时的关键词作为保底标题（由上游写入 _fallback_title 字段）。
     """
     def clean_field(text, max_len=None):
         if not text:
@@ -251,6 +254,9 @@ def build_filename_from_result(result):
 
     # 1. 书名
     title = (result.get("title") or "").strip()
+    if not title:
+        # 当解析结果中没有标题时，使用搜索关键词作为保底标题
+        title = (result.get("_fallback_title") or "").strip()
     # 移除括号及其内容（通常是推广语）
     title = re.sub(r'[\(（][^）\)]*[\)）]', '', title).strip()
     title = clean_field(title, 50)
@@ -521,6 +527,9 @@ def process_single_item(query, args, language=None, ext=None, year_min=None, yea
     last_err = None
     for pos, i in enumerate(candidate_indices):
         chosen = filtered[i]
+        # 当解析出来的标题为空时，在结果对象中写入搜索关键词，供文件名构建时兜底使用
+        if not (chosen.get("title") or "").strip():
+            chosen["_fallback_title"] = query
         print(f"[*] 尝试第 {pos+1} 个候选结果: {chosen['title']}")
         try:
             path = download_for_result(
