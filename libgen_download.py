@@ -478,7 +478,17 @@ def main():
         default=3,
         help="每个下载链接最多重试次数，默认 3",
     )
+    parser.add_argument(
+        "--proxy",
+        help="使用 http(s) 代理，例如 http://127.0.0.1:7890",
+    )
     args = parser.parse_args()
+
+    if args.proxy:
+        SESSION.proxies.update({
+            "http": args.proxy,
+            "https": args.proxy,
+        })
 
     try:
         results = search(
