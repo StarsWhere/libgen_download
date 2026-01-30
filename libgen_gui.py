@@ -181,6 +181,7 @@ class CSVImportDialog(QDialog):
         self.year_errors = 0
         self.parse_errors = 0
         self.headers = []
+        self.encoding_auto = True  # 首次自动检测编码
 
         self._build_ui()
         if preset_path:
@@ -202,6 +203,7 @@ class CSVImportDialog(QDialog):
         file_row.addWidget(QLabel("编码"))
         self.encoding_combo = QComboBox()
         self.encoding_combo.addItems(["utf-8", "utf-8-sig", "gbk", "big5", "iso-8859-1"])
+        self.encoding_combo.currentIndexChanged.connect(self._on_encoding_manual_change)
         file_row.addWidget(self.encoding_combo)
 
         reload_btn = QPushButton("重新加载")
@@ -277,6 +279,10 @@ class CSVImportDialog(QDialog):
             QMessageBox.warning(self, "提示", "请先选择 CSV/XLSX 文件")
             return
         self._set_encoding_enabled(not path.lower().endswith(".xlsx"))
+        if path.lower().endswith(".csv") and self.encoding_auto:
+            detected = self._auto_detect_csv_encoding(path)
+            if detected:
+                self._set_encoding_value(detected)
         try:
             headers, rows, parse_errors = self._read_tabular(path, preview_limit=100)
         except Exception as e:  # noqa: BLE001
@@ -288,11 +294,32 @@ class CSVImportDialog(QDialog):
         self._fill_combo_options()
         self._guess_mapping()
         self._fill_preview(rows)
-        self.status_label.setText(f"预览 {len(rows)} 行，表头 {len(self.headers)} 个，解析错误 {parse_errors} 行")
+        encoding_note = ""
+        if path.lower().endswith(".csv"):
+            encoding_note = f"，编码 {self.encoding_combo.currentText()}"
+        self.status_label.setText(
+            f"预览 {len(rows)} 行，表头 {len(self.headers)} 个，解析错误 {parse_errors} 行{encoding_note}"
+        )
 
     def _set_encoding_enabled(self, enabled):
         self.encoding_combo.setEnabled(enabled)
         self.encoding_combo.setToolTip("" if enabled else "XLSX 文件不需要选择编码")
+        if not enabled:
+            self.encoding_auto = True  # 下次切回 CSV 时重新尝试自动检测
+
+    def _set_encoding_value(self, enc):
+        block = self.encoding_combo.blockSignals(True)
+        idx = self.encoding_combo.findText(enc)
+        if idx < 0:
+            self.encoding_combo.insertItem(0, enc)
+            idx = 0
+        self.encoding_combo.setCurrentIndex(idx)
+        self.encoding_combo.blockSignals(block)
+        self.encoding_auto = True
+
+    def _on_encoding_manual_change(self, _index):
+        if self.encoding_combo.isEnabled():
+            self.encoding_auto = False
 
     def _read_tabular(self, path, preview_limit=None):
         suffix = Path(path).suffix.lower()
@@ -314,6 +341,19 @@ class CSVImportDialog(QDialog):
                 if preview_limit is not None and len(rows) >= preview_limit:
                     break
         return headers, rows, 0
+
+    def _auto_detect_csv_encoding(self, path):
+        candidates = ["utf-8-sig", "utf-8", "gbk", "big5", "iso-8859-1"]
+        for enc in candidates:
+            try:
+                with open(path, "r", encoding=enc) as f:
+                    f.read(4096)
+                return enc
+            except UnicodeDecodeError:
+                continue
+            except Exception:
+                break
+        return None
 
     def _read_xlsx(self, path, preview_limit=None):
         try:
