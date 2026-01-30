@@ -237,37 +237,51 @@ def clean_filename(name, max_length=150):
 def build_filename_from_result(result):
     """
     使用搜索结果构建文件名：
-    作者 - 标题 (年份, 出版社).扩展名
+    书名-作者-出版社-年份-语言-页数-其他.扩展名
+    优化：截断过长的字段，移除标题中括号内的冗余推广信息，并清理空白字符。
     """
-    parts = []
+    def clean_field(text, max_len=None):
+        if not text:
+            return ""
+        # 将所有空白字符（包括换行、制表符、多个空格）替换为单个空格
+        text = " ".join(text.split())
+        if max_len and len(text) > max_len:
+            text = text[:max_len].strip() + "..."
+        return text
 
-    author = (result.get("author") or "").strip()
+    # 1. 书名
     title = (result.get("title") or "").strip()
-    year = (result.get("year") or "").strip()
-    publisher = (result.get("publisher") or "").strip()
+    # 移除括号及其内容（通常是推广语）
+    title = re.sub(r'[\(（][^）\)]*[\)）]', '', title).strip()
+    title = clean_field(title, 50)
+    
+    # 2. 作者
+    author = clean_field(result.get("author"), 30)
+        
+    # 3. 出版社
+    publisher = clean_field(result.get("publisher"), 30)
+        
+    # 4. 年份
+    year = clean_field(result.get("year"))
+    
+    # 5. 语言
+    language = clean_field(result.get("language"))
+    
+    # 6. 页数
+    pages = clean_field(result.get("pages"))
+    
+    # 7. 其他 (使用 MD5 前 8 位作为唯一标识)
+    md5 = result.get("md5") or ""
+
     ext = (result.get("extension") or "bin").strip().lstrip(".")
 
-    if author:
-        parts.append(author)
-    if title:
-        if parts:
-            parts.append(" - ")
-        parts.append(title)
-
-    extras = []
-    if year:
-        extras.append(year)
-    if publisher:
-        extras.append(publisher)
-
-    if extras:
-        parts.append(" (" + ", ".join(extras) + ")")
-
-    if parts:
-        base = "".join(parts)
-    else:
-        md5 = result.get("md5") or "download"
-        base = md5
+    # 组合
+    fields = [title, author, publisher, year, language, pages]
+    # 过滤掉空字段并用连字符连接
+    base = "-".join([f for f in fields if f])
+    
+    if not base:
+        base = md5 or "download"
 
     filename = f"{base}.{ext}"
     return clean_filename(filename)
@@ -306,9 +320,14 @@ def download_file_from_get_url(get_url, out_dir=".", filename=None, max_retries=
                         if chunk:
                             f.write(chunk)
             except OSError:
-                # 如果因为文件名问题报错，再用一个更简单的名字
-                safe_name = clean_filename("download.bin")
-                path = os.path.join(out_dir, safe_name)
+                # 如果因为文件名问题报错，尝试使用 md5 作为文件名
+                md5_name = "download.bin"
+                if "md5=" in get_url:
+                    m = re.search(r"md5=([0-9a-f]{32})", get_url)
+                    if m:
+                        md5_name = f"{m.group(1)}.{fname.split('.')[-1]}"
+                
+                path = os.path.join(out_dir, clean_filename(md5_name))
                 with open(path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
                         if chunk:
