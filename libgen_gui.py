@@ -592,8 +592,8 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("Roo", "LibgenGUI")
         self.results = []
         self.download_queue = []
-        self.current_download_thread = None
-        self.current_download_worker = None
+        self.active_downloads = []  # [(thread, worker, task)]
+        self.row_progress = {}  # queue_row -> (downloaded, total)
         self.queue_tasks = []
         self.notify_mode = "toast_all"  # toast_all | toast_fail | silent
 
@@ -682,6 +682,13 @@ class MainWindow(QMainWindow):
         open_dir_btn.clicked.connect(self.open_download_directory)
         config_layout.addWidget(open_dir_btn)
 
+        config_layout.addWidget(QLabel("并行:"))
+        self.concurrent_spin = QSpinBox()
+        self.concurrent_spin.setRange(1, 50)
+        self.concurrent_spin.setValue(2)
+        self.concurrent_spin.setFixedWidth(60)
+        config_layout.addWidget(self.concurrent_spin)
+
         config_layout.addWidget(QLabel("提醒:"))
         self.notify_combo = QComboBox()
         self.notify_combo.addItem("轻提示：成功/失败", userData="toast_all")
@@ -740,8 +747,8 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.table)
 
         # 下载队列表
-        self.queue_table = QTableWidget(0, 7)
-        self.queue_table.setHorizontalHeaderLabels(["关键词", "语言", "格式", "年≥", "年≤", "状态", "信息"])
+        self.queue_table = QTableWidget(0, 8)
+        self.queue_table.setHorizontalHeaderLabels(["关键词", "语言", "格式", "年≥", "年≤", "状态", "进度", "信息"])
         self.queue_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.queue_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.queue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -795,6 +802,7 @@ class MainWindow(QMainWindow):
         idx = self.notify_combo.findData(self.notify_mode)
         if idx >= 0:
             self.notify_combo.setCurrentIndex(idx)
+        self.concurrent_spin.setValue(int(self.settings.value("concurrent_downloads", 2)))
         self._apply_proxy()
 
     def _save_settings(self):
@@ -803,6 +811,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("last_ext", self.ext_edit.text())
         self.settings.setValue("proxy_url", self.proxy_edit.text())
         self.settings.setValue("notify_mode", self.notify_combo.currentData())
+        self.settings.setValue("concurrent_downloads", self.concurrent_spin.value())
 
     def _apply_proxy(self):
         from libgen_download import set_proxy
@@ -982,89 +991,115 @@ class MainWindow(QMainWindow):
         self._start_next_download()
 
     def _start_next_download(self):
-        if self.current_download_thread:
-            return  # 正在下载
+        # 尝试填满并行槽位
+        while self.download_queue and len(self.active_downloads) < self.concurrent_spin.value():
+            task = self.download_queue.pop(0)
+            row = task.get("queue_row")
+            self.append_log(f"开始下载：{task.get('query') or task.get('result', {}).get('title')}")
+            self._apply_proxy()
+            out_dir = self.dir_edit.text().strip() or str(Path.cwd() / "downloads")
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-        if not self.download_queue:
+            # 标记队列状态为进行中
+            if row is not None and row < self.queue_table.rowCount():
+                self.queue_table.setItem(row, 5, QTableWidgetItem("下载中"))
+                self.queue_table.setItem(row, 6, QTableWidgetItem("0%"))
+                self.queue_table.setItem(row, 7, QTableWidgetItem(""))
+
+            thread = QThread()
+            worker = TaskWorker(
+                task,
+                out_dir,
+                limit=self.limit_spin.value(),
+            )
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(lambda path, r=row, w=worker, t=thread: self.on_download_finished(r, path))
+            worker.error.connect(lambda msg, r=row, w=worker, t=thread: self.on_download_error(r, msg))
+            worker.log.connect(self.on_worker_log)
+            worker.progress.connect(lambda d, tot, r=row: self.on_download_progress_row(r, d, tot))
+            worker.finished.connect(thread.quit)
+            worker.error.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.error.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.start()
+
+            self.active_downloads.append((thread, worker, task))
+            self.cancel_btn.setEnabled(True)
+
+        if not self.active_downloads and not self.download_queue:
             self.append_log("下载队列完成")
             self.cancel_btn.setEnabled(False)
+
+    def on_download_progress_row(self, row, downloaded, total):
+        if row is None or row >= self.queue_table.rowCount():
             return
-
-        task = self.download_queue.pop(0)
-        self.append_log(f"开始下载：{task.get('query') or task.get('result', {}).get('title')}")
-        self._apply_proxy()
-        out_dir = self.dir_edit.text().strip() or str(Path.cwd() / "downloads")
-        Path(out_dir).mkdir(parents=True, exist_ok=True)
-
-        # 标记队列状态为进行中
-        row = task.get("queue_row")
-        if row is not None and row < self.queue_table.rowCount():
-            self.queue_table.setItem(row, 5, QTableWidgetItem("下载中"))
-            self.queue_table.setItem(row, 6, QTableWidgetItem(""))
-
-        self.current_download_thread = QThread()
-        self.current_download_worker = TaskWorker(
-            task,
-            out_dir,
-            limit=self.limit_spin.value(),
-        )
-        self.current_download_worker.moveToThread(self.current_download_thread)
-
-        self.current_download_thread.started.connect(self.current_download_worker.run)
-        self.current_download_worker.finished.connect(self.on_download_finished)
-        self.current_download_worker.error.connect(self.on_download_error)
-        self.current_download_worker.log.connect(self.on_worker_log)
-        self.current_download_worker.progress.connect(self.on_download_progress)
-        self.current_download_worker.finished.connect(self.current_download_thread.quit)
-        self.current_download_worker.finished.connect(self.current_download_worker.deleteLater)
-        self.current_download_worker.error.connect(self.current_download_thread.quit)
-        self.current_download_worker.error.connect(self.current_download_worker.deleteLater)
-        self.current_download_thread.finished.connect(self._clear_download_thread)
-        self.current_download_thread.finished.connect(self.current_download_thread.deleteLater)
-        self.current_download_thread.start()
-
-        self.cancel_btn.setEnabled(True)
-
-    def on_download_progress(self, downloaded, total):
+        self.row_progress[row] = (downloaded, total)
         if total and total > 0:
             percent = int(downloaded / total * 100)
-            self.progress_bar.setValue(max(0, min(percent, 100)))
-            self.progress_bar.setFormat(
-                f"{percent}% ({downloaded / 1024 / 1024:.2f}MB / {total / 1024 / 1024:.2f}MB)"
-            )
+            text = f"{percent}% ({downloaded / 1024 / 1024:.2f}MB / {total / 1024 / 1024:.2f}MB)"
         else:
-            # 未知总长，只显示已下载
-            self.progress_bar.setFormat(f"{downloaded / 1024 / 1024:.2f}MB")
+            percent = 0
+            text = f"{downloaded / 1024 / 1024:.2f}MB"
+        self.queue_table.setItem(row, 6, QTableWidgetItem(f"{percent}%"))
+        self.queue_table.setItem(row, 7, QTableWidgetItem(text))
+        self._update_overall_progress()
 
-    def on_download_finished(self, path):
+    def on_download_finished(self, row, path):
         self.append_log(f"下载完成：{path}", level="success")
-        self._update_queue_status("成功", path)
+        self._update_queue_status(row, "成功", path)
+        self.row_progress.pop(row, None)
         self._notify("success", "下载完成", f"已保存到：\n{path}")
-        self._finish_current_download()
+        self._remove_active_by_row(row)
         self._start_next_download()
 
-    def on_download_error(self, message):
+    def on_download_error(self, row, message):
         self.append_log(f"下载失败：{message}", level="error")
-        self._update_queue_status("失败", message)
+        self._update_queue_status(row, "失败", message)
+        self.row_progress.pop(row, None)
         self._notify("error", "下载失败", message)
-        self._finish_current_download()
+        self._remove_active_by_row(row)
         self._start_next_download()
-
-    def _finish_current_download(self):
-        self.cancel_btn.setEnabled(False)
-        self.progress_bar.setValue(0)
-        if self.current_download_thread:
-            self.current_download_thread.quit()
-
-    def _clear_download_thread(self):
-        self.current_download_thread = None
-        self.current_download_worker = None
 
     def cancel_download(self):
-        if self.current_download_worker:
-            self.append_log("请求取消当前下载", level="warning")
-            self.current_download_worker.cancel()
+        if not self.active_downloads:
+            return
+        self.append_log("请求取消所有进行中的下载", level="warning")
+        for _thread, worker, _task in list(self.active_downloads):
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+        self.cancel_btn.setEnabled(False)
+
+    def _remove_active_by_row(self, row):
+        self.active_downloads = [
+            (t, w, task) for (t, w, task) in self.active_downloads if task.get("queue_row") != row
+        ]
+        if not self.active_downloads:
             self.cancel_btn.setEnabled(False)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("")
+        self._update_overall_progress()
+
+    def _update_overall_progress(self):
+        if not self.row_progress:
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("")
+            return
+        percents = []
+        for downloaded, total in self.row_progress.values():
+            if total and total > 0:
+                percents.append(max(0, min(100, int(downloaded / total * 100))))
+        if percents:
+            avg = sum(percents) / len(percents)
+            self.progress_bar.setValue(int(avg))
+            self.progress_bar.setFormat(f"并行 {len(self.row_progress)} 个任务，平均 {avg:.0f}%")
+        else:
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat(f"并行 {len(self.row_progress)} 个任务")
 
     def _notify(self, level, title, text):
         mode = self.notify_combo.currentData()
@@ -1094,6 +1129,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setItem(row, 4, QTableWidgetItem(""))
         self.queue_table.setItem(row, 5, QTableWidgetItem("排队中"))
         self.queue_table.setItem(row, 6, QTableWidgetItem(""))
+        self.queue_table.setItem(row, 7, QTableWidgetItem(""))
         return row
 
     def _add_queue_row_from_query(self, task):
@@ -1106,20 +1142,15 @@ class MainWindow(QMainWindow):
         self.queue_table.setItem(row, 4, QTableWidgetItem(str(task.get("year_max") or "")))
         self.queue_table.setItem(row, 5, QTableWidgetItem("排队中"))
         self.queue_table.setItem(row, 6, QTableWidgetItem(""))
+        self.queue_table.setItem(row, 7, QTableWidgetItem(""))
         return row
 
-    def _update_queue_status(self, status, info):
-        worker = self.current_download_worker
-        if not worker:
-            return
-        task = getattr(worker, "task", None)
-        if not task:
-            return
-        row = task.get("queue_row")
+    def _update_queue_status(self, row, status, info):
         if row is None or row >= self.queue_table.rowCount():
             return
         self.queue_table.setItem(row, 5, QTableWidgetItem(status))
-        self.queue_table.setItem(row, 6, QTableWidgetItem(info))
+        # 进度列 6 由 progress 更新
+        self.queue_table.setItem(row, 7, QTableWidgetItem(info))
 
     # --- CSV 导入 ---
     def import_csv(self):

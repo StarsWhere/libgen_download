@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
-from threading import Event, Thread
+from threading import Event
 
 
 # 搜索主站域名：改成你自己的入口（现在用的是示例）
@@ -430,7 +430,6 @@ def download_for_result(
     out_dir=".",
     max_entry_urls=5,
     max_get_retries=3,
-    parallel_entries=True,
     logger=None,
     progress_cb=None,
     cancel_event: Event | None = None,
@@ -456,8 +455,6 @@ def download_for_result(
         raise DownloadError("没有可用的下载入口链接（既没有 ads_url 也没有 mirrors）")
 
     entries = candidate_urls[:max_entry_urls]
-    if parallel_entries and len(entries) > 1:
-        _log(f"[*] 并行尝试 {len(entries)} 个下载入口，取最先完成的结果", logger=logger)
 
     def validate_file(path):
         try:
@@ -479,19 +476,18 @@ def download_for_result(
 
     last_err = None
 
-    def attempt_entry(entry_url, stop_event: Event | None):
-        nonlocal last_err
-        _log(f"[*] 尝试下载入口: {entry_url}", logger=logger)
+    for i, entry_url in enumerate(entries):
+        _log(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}", logger=logger)
         try:
             get_url = fetch_download_link_from_page(entry_url)
         except requests.RequestException as e:
             _log(f"[!] 打开入口页失败: {e}", level="error", logger=logger)
             last_err = e
-            return None
+            continue
 
         if not get_url:
-            _log("[!] 在入口页中没有找到 get/download 链接", level="warning", logger=logger)
-            return None
+            _log("[!] 在入口页中没有找到 get/download 链接，尝试下一个入口", level="warning", logger=logger)
+            continue
 
         _log(f"[*] 解析到下载链接: {get_url}", logger=logger)
         try:
@@ -503,7 +499,7 @@ def download_for_result(
                 logger=logger,
                 progress_cb=progress_cb,
                 cancel_event=cancel_event,
-                stop_event=stop_event,
+                stop_event=None,
             )
             if not validate_file(path):
                 _log("[!] 下载文件校验失败，尝试其他镜像", level="warning", logger=logger)
@@ -511,57 +507,13 @@ def download_for_result(
                     os.remove(path)
                 except OSError:
                     pass
-                return None
+                continue
             _log(f"[+] 使用入口 {entry_url} 下载成功", level="success", logger=logger)
             return path
         except DownloadError as e:
             _log(f"[!] 使用入口 {entry_url} 下载失败: {e}", level="error", logger=logger)
             last_err = e
-            return None
-
-    if parallel_entries and len(entries) > 1:
-        stop_event = Event()
-        success_path = None
-        threads = []
-
-        for entry_url in entries:
-            t = Thread(target=lambda url=entry_url: None)
-            threads.append(t)
-
-        # 为了捕获返回值，定义包装
-        results = {}
-
-        def worker(url):
-            nonlocal success_path
-            if stop_event.is_set():
-                return
-            path = attempt_entry(url, stop_event)
-            if path and not stop_event.is_set():
-                success_path = path
-                stop_event.set()
-            results[url] = path
-
-        # 重建线程以使用 worker
-        threads = []
-        for url in entries:
-            t = Thread(target=worker, args=(url,))
-            t.start()
-            threads.append(t)
-
-        for t in threads:
-            t.join()
-
-        if success_path:
-            # 清理其他成功但慢的下载（理论上 stop_event 已阻断）
-            return success_path
-        raise DownloadError(f"并行尝试所有镜像均失败: {last_err}")
-
-    # 顺序回退模式
-    for i, entry_url in enumerate(entries):
-        _log(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}", logger=logger)
-        path = attempt_entry(entry_url, None)
-        if path:
-            return path
+            continue
 
     raise DownloadError(f"该条目所有尝试的镜像/入口均下载失败: {last_err}")
 
