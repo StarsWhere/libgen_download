@@ -101,12 +101,21 @@ def parse_search_results(html, base_url=BASE_URL):
 
         # col0: 标题 + ISBN + badge + edition 链接
         col0 = cols[0]
-        first_a = col0.find("a")
-        if first_a:
-            raw_title = first_a.get_text(" ", strip=True)
+        # 优先寻找带有具体书名链接的 a 标签（通常是第一个 a 标签，但要排除掉一些小图标链接）
+        # 观察发现书名链接通常包含在第一个 <a> 中，或者直接在 td 文本中
+        title_link = col0.find("a", href=lambda x: x and "edition.php" not in x)
+        if title_link:
+            raw_title = title_link.get_text(" ", strip=True)
         else:
+            # 兜底：移除脚本和样式标签后获取纯文本
+            for s in col0(["script", "style"]):
+                s.decompose()
             raw_title = col0.get_text(" ", strip=True)
+        
+        # 清理标题：移除多余空格，处理可能的 ISBN 混入
         title = " ".join(raw_title.split())
+        # 如果标题里包含 ISBN: ... 这种，尝试截断（Libgen 有时会把 ISBN 放在标题后面）
+        title = re.split(r'ISBN[:\s]', title, flags=re.I)[0].strip()
 
         edition_id = None
         edition_url = None
@@ -269,9 +278,10 @@ def build_filename_from_result(result):
     if not title:
         # 当解析结果中没有标题时，使用搜索关键词作为保底标题
         title = (result.get("_fallback_title") or "").strip()
-    # 移除括号及其内容（通常是推广语）
-    title = re.sub(r'[\(（][^）\)]*[\)）]', '', title).strip()
-    title = clean_field(title, 50)
+    # 移除括号及其内容（通常是推广语），但保留一些可能有意义的（如 [2nd ed.]）
+    # 这里简单处理，只移除常见的推广或冗余括号
+    title = re.sub(r'[\(（](?:[^\(\)（）]{20,})[\)）]', '', title).strip()
+    title = clean_field(title, 80)
     
     # 2. 作者
     author = clean_field(result.get("author"), 30)

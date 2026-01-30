@@ -665,15 +665,19 @@ class MainWindow(QMainWindow):
         self.search_btn.setEnabled(True)
         self.results = results
         self.download_btn.setEnabled(bool(results))
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(results))
         for row, r in enumerate(results):
-            self.table.setItem(row, 0, QTableWidgetItem(r.get("title") or ""))
+            title_item = QTableWidgetItem(r.get("title") or "")
+            title_item.setData(Qt.ItemDataRole.UserRole, row)
+            self.table.setItem(row, 0, title_item)
             self.table.setItem(row, 1, QTableWidgetItem(r.get("author") or ""))
             self.table.setItem(row, 2, QTableWidgetItem(r.get("publisher") or ""))
             self.table.setItem(row, 3, QTableWidgetItem(r.get("year") or ""))
             self.table.setItem(row, 4, QTableWidgetItem(r.get("language") or ""))
             self.table.setItem(row, 5, QTableWidgetItem(r.get("extension") or ""))
             self.table.setItem(row, 6, QTableWidgetItem(r.get("size") or ""))
+        self.table.setSortingEnabled(True)
         self.append_log(f"搜索完成，获得 {len(results)} 条结果")
 
     def on_search_error(self, message):
@@ -687,18 +691,22 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先搜索并选择结果")
             return
 
-        selected_rows = {index.row() for index in self.table.selectedIndexes()}
-        if not selected_rows:
+        selected_indices = self.table.selectionModel().selectedRows()
+        if not selected_indices:
             QMessageBox.information(self, "提示", "请选择至少一行进行下载")
             return
 
         tasks = []
-        for i in sorted(selected_rows):
-            tasks.append({
-                "type": "result",
-                "result": self.results[i],
-                "queue_row": self._add_queue_row_from_result(self.results[i]),
-            })
+        for index in selected_indices:
+            row = index.row()
+            original_idx = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            if original_idx is not None and original_idx < len(self.results):
+                result_data = self.results[original_idx]
+                tasks.append({
+                    "type": "result",
+                    "result": result_data,
+                    "queue_row": self._add_queue_row_from_result(result_data),
+                })
         self.download_queue.extend(tasks)
         self.queue_tasks.extend(tasks)
         self.append_log(f"准备下载 {len(tasks)} 个条目")
@@ -800,7 +808,8 @@ class MainWindow(QMainWindow):
     def _add_queue_row_from_result(self, result):
         row = self.queue_table.rowCount()
         self.queue_table.insertRow(row)
-        self.queue_table.setItem(row, 0, QTableWidgetItem(result.get("title") or result.get("md5") or ""))
+        title = result.get("title") or result.get("md5") or "未知标题"
+        self.queue_table.setItem(row, 0, QTableWidgetItem(title))
         self.queue_table.setItem(row, 1, QTableWidgetItem(result.get("language") or ""))
         self.queue_table.setItem(row, 2, QTableWidgetItem(result.get("extension") or ""))
         self.queue_table.setItem(row, 3, QTableWidgetItem(""))
