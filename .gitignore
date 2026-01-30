@@ -16,6 +16,11 @@ downloads/
 # 日志文件
 *.log
 
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+
 # 编辑器配置文件
 .vscode/
 .idea/
