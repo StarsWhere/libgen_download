@@ -3,11 +3,12 @@ import csv
 import os
 import re
 import unicodedata
+from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
-from threading import Event
+from threading import Event, Thread
 
 
 # 搜索主站域名：改成你自己的入口（现在用的是示例）
@@ -334,6 +335,7 @@ def download_file_from_get_url(
     logger=None,
     progress_cb=None,
     cancel_event: Event | None = None,
+    stop_event: Event | None = None,
 ):
     """
     针对一个 get.php/download 链接，带重试逻辑：
@@ -342,6 +344,7 @@ def download_file_from_get_url(
     - 4xx：视为客户端错误，不重试
     """
     last_exc = None
+    target_name = filename or "download.bin"
     for attempt in range(1, max_retries + 1):
         try:
             resp = SESSION.get(get_url, stream=True, allow_redirects=True, timeout=timeout)
@@ -355,8 +358,7 @@ def download_file_from_get_url(
                 # 4xx 客户端错误，不再重试
                 raise requests.HTTPError(f"Client error: {status}", response=resp)
 
-            fname = filename or "download.bin"
-            fname = clean_filename(fname)
+            fname = clean_filename(target_name)
 
             os.makedirs(out_dir, exist_ok=True)
             path = os.path.join(out_dir, fname)
@@ -372,26 +374,23 @@ def download_file_from_get_url(
             try:
                 with open(path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
-                        if cancel_event and cancel_event.is_set():
-                            raise DownloadError("用户取消下载")
+                        if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
+                            raise DownloadError("下载已被取消")
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
                             if progress_cb:
                                 progress_cb(downloaded, total)
             except OSError:
-                # 如果因为文件名问题报错，尝试使用 md5 作为文件名
-                md5_name = "download.bin"
-                if "md5=" in get_url:
-                    m = re.search(r"md5=([0-9a-f]{32})", get_url)
-                    if m:
-                        md5_name = f"{m.group(1)}.{fname.split('.')[-1]}"
-                
-                path = os.path.join(out_dir, clean_filename(md5_name))
+                # 文件名/路径过长等问题，尝试更短的安全文件名
+                short_base = clean_filename(Path(fname).stem)[:80] or "download"
+                ext = Path(fname).suffix or ".bin"
+                alt_name = f"{short_base}{ext}"
+                path = os.path.join(out_dir, alt_name)
                 with open(path, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=8192):
-                        if cancel_event and cancel_event.is_set():
-                            raise DownloadError("用户取消下载")
+                        if (cancel_event and cancel_event.is_set()) or (stop_event and stop_event.is_set()):
+                            raise DownloadError("下载已被取消")
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
@@ -406,6 +405,14 @@ def download_file_from_get_url(
         except requests.HTTPError as e:
             last_exc = e
             break
+        except DownloadError as e:
+            last_exc = e
+            if "path" in locals() and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            break
 
     raise DownloadError(f"下载失败（GET: {get_url}）：{last_exc}")
 
@@ -415,6 +422,7 @@ def download_for_result(
     out_dir=".",
     max_entry_urls=5,
     max_get_retries=3,
+    parallel_entries=True,
     logger=None,
     progress_cb=None,
     cancel_event: Event | None = None,
@@ -427,6 +435,7 @@ def download_for_result(
     """
     filename = build_filename_from_result(result)
     _log(f"[*] 计划保存文件名: {filename}", logger=logger)
+    expected_ext = (result.get("extension") or "").lower()
 
     candidate_urls = []
     if result.get("ads_url"):
@@ -438,19 +447,43 @@ def download_for_result(
     if not candidate_urls:
         raise DownloadError("没有可用的下载入口链接（既没有 ads_url 也没有 mirrors）")
 
+    entries = candidate_urls[:max_entry_urls]
+    if parallel_entries and len(entries) > 1:
+        _log(f"[*] 并行尝试 {len(entries)} 个下载入口，取最先完成的结果", logger=logger)
+
+    def validate_file(path):
+        try:
+            if not os.path.exists(path):
+                return False
+            size = os.path.getsize(path)
+            if size < 10 * 1024:  # 小于10KB认为异常
+                return False
+            sig = b""
+            with open(path, "rb") as f:
+                sig = f.read(8)
+            if expected_ext == "pdf" and not sig.startswith(b"%PDF"):
+                return False
+            if expected_ext in {"epub", "zip"} and not sig.startswith(b"PK"):
+                return False
+            return True
+        except Exception:
+            return False
+
     last_err = None
-    for i, entry_url in enumerate(candidate_urls[:max_entry_urls]):
-        _log(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}", logger=logger)
+
+    def attempt_entry(entry_url, stop_event: Event | None):
+        nonlocal last_err
+        _log(f"[*] 尝试下载入口: {entry_url}", logger=logger)
         try:
             get_url = fetch_download_link_from_page(entry_url)
         except requests.RequestException as e:
             _log(f"[!] 打开入口页失败: {e}", level="error", logger=logger)
             last_err = e
-            continue
+            return None
 
         if not get_url:
-            _log("[!] 在入口页中没有找到 get/download 链接，尝试下一个入口", level="warning", logger=logger)
-            continue
+            _log("[!] 在入口页中没有找到 get/download 链接", level="warning", logger=logger)
+            return None
 
         _log(f"[*] 解析到下载链接: {get_url}", logger=logger)
         try:
@@ -462,13 +495,65 @@ def download_for_result(
                 logger=logger,
                 progress_cb=progress_cb,
                 cancel_event=cancel_event,
+                stop_event=stop_event,
             )
+            if not validate_file(path):
+                _log("[!] 下载文件校验失败，尝试其他镜像", level="warning", logger=logger)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                return None
             _log(f"[+] 使用入口 {entry_url} 下载成功", level="success", logger=logger)
             return path
         except DownloadError as e:
             _log(f"[!] 使用入口 {entry_url} 下载失败: {e}", level="error", logger=logger)
             last_err = e
-            continue
+            return None
+
+    if parallel_entries and len(entries) > 1:
+        stop_event = Event()
+        success_path = None
+        threads = []
+
+        for entry_url in entries:
+            t = Thread(target=lambda url=entry_url: None)
+            threads.append(t)
+
+        # 为了捕获返回值，定义包装
+        results = {}
+
+        def worker(url):
+            nonlocal success_path
+            if stop_event.is_set():
+                return
+            path = attempt_entry(url, stop_event)
+            if path and not stop_event.is_set():
+                success_path = path
+                stop_event.set()
+            results[url] = path
+
+        # 重建线程以使用 worker
+        threads = []
+        for url in entries:
+            t = Thread(target=worker, args=(url,))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        if success_path:
+            # 清理其他成功但慢的下载（理论上 stop_event 已阻断）
+            return success_path
+        raise DownloadError(f"并行尝试所有镜像均失败: {last_err}")
+
+    # 顺序回退模式
+    for i, entry_url in enumerate(entries):
+        _log(f"[*] 尝试第 {i+1} 个下载入口: {entry_url}", logger=logger)
+        path = attempt_entry(entry_url, None)
+        if path:
+            return path
 
     raise DownloadError(f"该条目所有尝试的镜像/入口均下载失败: {last_err}")
 
