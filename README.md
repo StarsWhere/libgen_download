@@ -35,7 +35,7 @@ pip install -r requirements.txt
 ```bash
 python libgen_gui.py
 ```
-GUI 版提供搜索表单、结果表格、多选下载、下载队列、进度条与日志视图，并将任务放到后台线程，确保界面流畅。支持拖拽或按钮导入 CSV，预览前 100 行并映射列（关键词/语言/格式/年份），验证后可批量入队下载。
+GUI 版提供搜索表单、结果表格、多选下载、下载队列、进度条与日志视图，并将任务放到后台线程，确保界面流畅。支持拖拽或按钮导入 CSV/XLSX，预览前 100 行并映射列（关键词/语言/格式/年份），验证后可批量入队下载；无法解析的行会被自动忽略并计数提示。
 
 ## 快速上手
 
@@ -51,11 +51,12 @@ python libgen_download.py "深入理解计算机系统"
 python libgen_download.py "Python 编程" --language Chinese --ext pdf --year-min 2010
 ```
 
-### 3. CSV 批量下载
+### 3. CSV 批量下载（CLI）
 准备一个 CSV 文件（如 `books.csv`），包含“书名”和“类型”列：
 ```bash
 python libgen_download.py --csv books.csv --col-query 书名 --col-ext 类型
 ```
+> 提示：GUI 已支持 CSV/XLSX 导入；命令行模式目前仅支持 CSV。
 
 ## 完整参数说明
 

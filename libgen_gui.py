@@ -30,7 +30,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QMenu,
 )
-
 from libgen_download import smart_search, download_for_result, DownloadError
 
 
@@ -174,12 +173,13 @@ class TaskWorker(QObject):
 class CSVImportDialog(QDialog):
     def __init__(self, parent=None, preset_path=None):
         super().__init__(parent)
-        self.setWindowTitle("导入 CSV 并映射列")
+        self.setWindowTitle("导入 CSV/XLSX 并映射列")
         self.resize(900, 600)
         self.file_path = preset_path
         self.tasks = []
         self.skipped = 0
         self.year_errors = 0
+        self.parse_errors = 0
         self.headers = []
 
         self._build_ui()
@@ -193,7 +193,7 @@ class CSVImportDialog(QDialog):
         # 文件选择行
         file_row = QHBoxLayout()
         self.path_edit = QLineEdit()
-        file_row.addWidget(QLabel("CSV 文件"))
+        file_row.addWidget(QLabel("CSV/XLSX 文件"))
         file_row.addWidget(self.path_edit, 1)
         choose_btn = QPushButton("选择")
         choose_btn.clicked.connect(self.browse_file)
@@ -261,7 +261,12 @@ class CSVImportDialog(QDialog):
         self.setLayout(layout)
 
     def browse_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择 CSV 文件", "", "CSV Files (*.csv);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择文件",
+            "",
+            "表格文件 (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*)",
+        )
         if path:
             self.path_edit.setText(path)
             self.load_file()
@@ -269,26 +274,90 @@ class CSVImportDialog(QDialog):
     def load_file(self):
         path = self.path_edit.text().strip()
         if not path:
-            QMessageBox.warning(self, "提示", "请先选择 CSV 文件")
+            QMessageBox.warning(self, "提示", "请先选择 CSV/XLSX 文件")
             return
-        enc = self.encoding_combo.currentText()
+        self._set_encoding_enabled(not path.lower().endswith(".xlsx"))
         try:
-            with open(path, "r", encoding=enc, newline="") as f:
-                reader = csv.DictReader(f)
-                self.headers = reader.fieldnames or []
-                rows = []
-                for i, row in enumerate(reader):
-                    if i >= 100:
-                        break
-                    rows.append(row)
+            headers, rows, parse_errors = self._read_tabular(path, preview_limit=100)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "读取失败", f"读取文件出错：{e}")
             return
 
+        self.headers = headers
+        self.parse_errors = parse_errors
         self._fill_combo_options()
         self._guess_mapping()
         self._fill_preview(rows)
-        self.status_label.setText(f"预览 {len(rows)} 行，表头 {len(self.headers)} 个")
+        self.status_label.setText(f"预览 {len(rows)} 行，表头 {len(self.headers)} 个，解析错误 {parse_errors} 行")
+
+    def _set_encoding_enabled(self, enabled):
+        self.encoding_combo.setEnabled(enabled)
+        self.encoding_combo.setToolTip("" if enabled else "XLSX 文件不需要选择编码")
+
+    def _read_tabular(self, path, preview_limit=None):
+        suffix = Path(path).suffix.lower()
+        if suffix == ".csv":
+            return self._read_csv(path, preview_limit)
+        if suffix == ".xlsx":
+            return self._read_xlsx(path, preview_limit)
+        raise ValueError("仅支持 CSV 或 XLSX 文件")
+
+    def _read_csv(self, path, preview_limit=None):
+        enc = self.encoding_combo.currentText()
+        rows = []
+        headers = []
+        with open(path, "r", encoding=enc, newline="") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            for row in reader:
+                rows.append(row)
+                if preview_limit is not None and len(rows) >= preview_limit:
+                    break
+        return headers, rows, 0
+
+    def _read_xlsx(self, path, preview_limit=None):
+        try:
+            import openpyxl  # type: ignore
+        except ImportError as e:  # pragma: no cover - 确保有提示
+            raise RuntimeError("需要安装 openpyxl 才能读取 XLSX 文件") from e
+
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+
+        headers = []
+        rows = []
+        parse_errors = 0
+        header_found = False
+
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if v is None else str(v).strip() for v in row]
+            if not header_found:
+                if any(cells):
+                    headers = [c if c else f"列{idx + 1}" for idx, c in enumerate(cells)]
+                    header_found = True
+                continue
+
+            if not header_found:
+                continue
+
+            if not any(cells):
+                continue
+
+            try:
+                mapped = {h: cells[i] if i < len(cells) else "" for i, h in enumerate(headers)}
+                rows.append(mapped)
+                if preview_limit is not None and len(rows) >= preview_limit:
+                    break
+            except Exception:
+                parse_errors += 1
+                continue
+
+        if not header_found:
+            raise ValueError("未在 XLSX 中找到表头行（首个非空行）")
+
+        wb.close()
+
+        return headers, rows, parse_errors
 
     def _fill_combo_options(self):
         combos = [self.combo_query, self.combo_lang, self.combo_ext, self.combo_year_min, self.combo_year_max]
@@ -324,13 +393,12 @@ class CSVImportDialog(QDialog):
     def accept_dialog(self):
         path = self.path_edit.text().strip()
         if not path:
-            QMessageBox.warning(self, "提示", "请先选择 CSV 文件")
+            QMessageBox.warning(self, "提示", "请先选择 CSV/XLSX 文件")
             return
         if self.combo_query.currentIndex() <= 0:
             QMessageBox.warning(self, "提示", "必须选择“搜索关键词”列")
             return
 
-        enc = self.encoding_combo.currentText()
         col_query = self.combo_query.currentText()
         col_lang = self.combo_lang.currentText() if self.combo_lang.currentIndex() > 0 else None
         col_ext = self.combo_ext.currentText() if self.combo_ext.currentIndex() > 0 else None
@@ -341,35 +409,34 @@ class CSVImportDialog(QDialog):
         skipped = 0
         year_errors = 0
         try:
-            with open(path, "r", encoding=enc, newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    query = (row.get(col_query) or "").strip()
-                    if not query:
-                        skipped += 1
+            _, rows, parse_errors = self._read_tabular(path, preview_limit=None)
+            for row in rows:
+                query = (row.get(col_query) or "").strip()
+                if not query:
+                    skipped += 1
+                    continue
+                lang = (row.get(col_lang) or "").strip() if col_lang else None
+                ext = (row.get(col_ext) or "").strip() if col_ext else None
+                raw_ymin = row.get(col_ymin) if col_ymin else None
+                raw_ymax = row.get(col_ymax) if col_ymax else None
+                y_min = self._safe_int(raw_ymin) if raw_ymin else None
+                y_max = self._safe_int(raw_ymax) if raw_ymax else None
+                parse_error = (raw_ymin and y_min is None) or (raw_ymax and y_max is None)
+                if parse_error:
+                    year_errors += 1
+                    if self.cb_ignore_year.isChecked():
+                        y_min = None
+                        y_max = None
+                    else:
                         continue
-                    lang = (row.get(col_lang) or "").strip() if col_lang else None
-                    ext = (row.get(col_ext) or "").strip() if col_ext else None
-                    raw_ymin = row.get(col_ymin) if col_ymin else None
-                    raw_ymax = row.get(col_ymax) if col_ymax else None
-                    y_min = self._safe_int(raw_ymin) if raw_ymin else None
-                    y_max = self._safe_int(raw_ymax) if raw_ymax else None
-                    parse_error = (raw_ymin and y_min is None) or (raw_ymax and y_max is None)
-                    if parse_error:
-                        year_errors += 1
-                        if self.cb_ignore_year.isChecked():
-                            y_min = None
-                            y_max = None
-                        else:
-                            continue
-                    tasks.append({
-                        "type": "query",
-                        "query": query,
-                        "language": lang or None,
-                        "ext": ext or None,
-                        "year_min": y_min,
-                        "year_max": y_max,
-                    })
+                tasks.append({
+                    "type": "query",
+                    "query": query,
+                    "language": lang or None,
+                    "ext": ext or None,
+                    "year_min": y_min,
+                    "year_max": y_max,
+                })
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "读取失败", f"读取文件出错：{e}")
             return
@@ -377,6 +444,7 @@ class CSVImportDialog(QDialog):
         self.tasks = tasks
         self.skipped = skipped
         self.year_errors = year_errors
+        self.parse_errors = parse_errors
         self.accept()
 
     @staticmethod
@@ -502,7 +570,7 @@ class MainWindow(QMainWindow):
         open_dir_btn.clicked.connect(self.open_download_directory)
         config_layout.addWidget(open_dir_btn)
 
-        self.csv_btn = QPushButton("导入 CSV")
+        self.csv_btn = QPushButton("导入书籍单")
         self.csv_btn.clicked.connect(self.import_csv)
         config_layout.addWidget(self.csv_btn)
 
@@ -934,14 +1002,17 @@ class MainWindow(QMainWindow):
             t["queue_row"] = self._add_queue_row_from_query(t)
         self.download_queue.extend(tasks)
         self.queue_tasks.extend(tasks)
-        self.append_log(f"CSV 导入：入队 {len(tasks)} 条任务，跳过 {dlg.skipped} 条，年份错误 {dlg.year_errors} 条")
+        self.append_log(
+            f"表格导入：入队 {len(tasks)} 条任务，跳过 {dlg.skipped} 条，年份错误 {dlg.year_errors} 条，解析错误 {dlg.parse_errors} 条"
+        )
         self._start_next_download()
 
     # 拖拽 CSV 支持
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith(".csv"):
+                lower = url.toLocalFile().lower()
+                if lower.endswith(".csv") or lower.endswith(".xlsx"):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -949,7 +1020,8 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".csv"):
+            lower = path.lower()
+            if lower.endswith(".csv") or lower.endswith(".xlsx"):
                 dlg = CSVImportDialog(self, preset_path=path)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     self._enqueue_csv_tasks(dlg)
