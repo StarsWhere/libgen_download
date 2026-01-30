@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from threading import Event
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QSettings, QUrl
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QSettings, QUrl, QTimer, QPoint
 from PyQt6.QtGui import QDesktopServices, QAction, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QGroupBox,
     QMenu,
+    QFrame,
 )
 from libgen_download import smart_search, download_for_result, DownloadError
 
@@ -63,6 +64,61 @@ DARK_QSS = """
     QScrollBar::handle:vertical { background: #555; min-height: 20px; border-radius: 5px; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 """
+
+
+class ToastNotification(QFrame):
+    """轻量 Toast 提示，自动消失，不阻塞主流程。"""
+
+    def __init__(self, parent, title, text, level="info", duration_ms=3000, width=360):
+        super().__init__(parent, Qt.WindowType.ToolTip)
+        self.setWindowFlags(
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setStyleSheet(
+            """
+            QFrame {
+                background: rgba(40, 40, 40, 0.92);
+                color: #f0f0f0;
+                border-radius: 8px;
+                border: 1px solid rgba(255,255,255,0.08);
+            }
+            QLabel#title { font-weight: bold; color: %s; }
+            QLabel#body { color: #e0e0e0; }
+            """
+            % ("#28a745" if level == "success" else ("#ff6b6b" if level == "error" else "#66b1ff"))
+        )
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(6)
+
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("title")
+        body_lbl = QLabel(text)
+        body_lbl.setObjectName("body")
+        body_lbl.setWordWrap(True)
+
+        lay.addWidget(title_lbl)
+        lay.addWidget(body_lbl)
+
+        self.resize(width, self.sizeHint().height())
+
+        # 定时自动关闭
+        QTimer.singleShot(duration_ms, self.close)
+
+    def show_relative(self, parent_widget, margin=16):
+        # 停靠到父窗口右下
+        if parent_widget is None:
+            self.show()
+            return
+        bottom_right = parent_widget.mapToGlobal(QPoint(parent_widget.width(), parent_widget.height()))
+        x = bottom_right.x() - self.width() - margin
+        y = bottom_right.y() - self.height() - margin
+        self.move(QPoint(x, y))
+        self.show()
 
 
 class SearchWorker(QObject):
@@ -539,6 +595,7 @@ class MainWindow(QMainWindow):
         self.current_download_thread = None
         self.current_download_worker = None
         self.queue_tasks = []
+        self.notify_mode = "toast_all"  # toast_all | toast_fail | silent
 
         self._build_ui()
         self._apply_style()
@@ -624,6 +681,14 @@ class MainWindow(QMainWindow):
         open_dir_btn = QPushButton("打开目录")
         open_dir_btn.clicked.connect(self.open_download_directory)
         config_layout.addWidget(open_dir_btn)
+
+        config_layout.addWidget(QLabel("提醒:"))
+        self.notify_combo = QComboBox()
+        self.notify_combo.addItem("轻提示：成功/失败", userData="toast_all")
+        self.notify_combo.addItem("轻提示：仅失败", userData="toast_fail")
+        self.notify_combo.addItem("静默（不提醒）", userData="silent")
+        self.notify_combo.setFixedWidth(150)
+        config_layout.addWidget(self.notify_combo)
 
         self.csv_btn = QPushButton("导入书籍单")
         self.csv_btn.clicked.connect(self.import_csv)
@@ -726,6 +791,10 @@ class MainWindow(QMainWindow):
         self.lang_edit.setText(self.settings.value("last_lang", ""))
         self.ext_edit.setText(self.settings.value("last_ext", ""))
         self.proxy_edit.setText(self.settings.value("proxy_url", ""))
+        self.notify_mode = self.settings.value("notify_mode", "toast_all")
+        idx = self.notify_combo.findData(self.notify_mode)
+        if idx >= 0:
+            self.notify_combo.setCurrentIndex(idx)
         self._apply_proxy()
 
     def _save_settings(self):
@@ -733,6 +802,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("last_lang", self.lang_edit.text())
         self.settings.setValue("last_ext", self.ext_edit.text())
         self.settings.setValue("proxy_url", self.proxy_edit.text())
+        self.settings.setValue("notify_mode", self.notify_combo.currentData())
 
     def _apply_proxy(self):
         from libgen_download import set_proxy
@@ -969,14 +1039,14 @@ class MainWindow(QMainWindow):
     def on_download_finished(self, path):
         self.append_log(f"下载完成：{path}", level="success")
         self._update_queue_status("成功", path)
-        QMessageBox.information(self, "下载完成", f"已保存到：\n{path}")
+        self._notify("success", "下载完成", f"已保存到：\n{path}")
         self._finish_current_download()
         self._start_next_download()
 
     def on_download_error(self, message):
         self.append_log(f"下载失败：{message}", level="error")
         self._update_queue_status("失败", message)
-        QMessageBox.critical(self, "下载失败", message)
+        self._notify("error", "下载失败", message)
         self._finish_current_download()
         self._start_next_download()
 
@@ -995,6 +1065,15 @@ class MainWindow(QMainWindow):
             self.append_log("请求取消当前下载", level="warning")
             self.current_download_worker.cancel()
             self.cancel_btn.setEnabled(False)
+
+    def _notify(self, level, title, text):
+        mode = self.notify_combo.currentData()
+        if mode == "silent":
+            return
+        if mode == "toast_fail" and level != "error":
+            return
+        toast = ToastNotification(self, title, text, level="success" if level == "success" else ("error" if level == "error" else "info"))
+        toast.show_relative(self)
 
     @staticmethod
     def _safe_int(text):
