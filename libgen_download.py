@@ -21,6 +21,16 @@ SESSION.headers.update({
 
 
 # 轻量日志分发：优先调用传入的 logger/回调，否则退回 print。
+def set_proxy(proxy_url):
+    """设置全局代理"""
+    if proxy_url:
+        SESSION.proxies.update({
+            "http": proxy_url,
+            "https": proxy_url,
+        })
+    else:
+        SESSION.proxies.clear()
+
 def _log(message, level="info", logger=None):
     if logger:
         try:

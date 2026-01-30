@@ -486,6 +486,12 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(QLabel("下载目录:"))
         self.dir_edit = QLineEdit()
         config_layout.addWidget(self.dir_edit, 1)
+
+        config_layout.addWidget(QLabel("代理:"))
+        self.proxy_edit = QLineEdit()
+        self.proxy_edit.setPlaceholderText("http://127.0.0.1:7890")
+        self.proxy_edit.setFixedWidth(200)
+        config_layout.addWidget(self.proxy_edit)
         
         choose_btn = QPushButton("选择目录")
         choose_btn.clicked.connect(self.choose_directory)
@@ -587,11 +593,18 @@ class MainWindow(QMainWindow):
         self.dir_edit.setText(self.settings.value("download_dir", str(Path.cwd() / "downloads")))
         self.lang_edit.setText(self.settings.value("last_lang", ""))
         self.ext_edit.setText(self.settings.value("last_ext", ""))
+        self.proxy_edit.setText(self.settings.value("proxy_url", ""))
+        self._apply_proxy()
 
     def _save_settings(self):
         self.settings.setValue("download_dir", self.dir_edit.text())
         self.settings.setValue("last_lang", self.lang_edit.text())
         self.settings.setValue("last_ext", self.ext_edit.text())
+        self.settings.setValue("proxy_url", self.proxy_edit.text())
+
+    def _apply_proxy(self):
+        from libgen_download import set_proxy
+        set_proxy(self.proxy_edit.text().strip())
 
     def clear_finished_tasks(self):
         for i in range(self.queue_table.rowCount() - 1, -1, -1):
@@ -635,6 +648,7 @@ class MainWindow(QMainWindow):
         self.search_btn.setEnabled(False)
         self.append_log(f"开始搜索：{query}")
         self._save_settings()
+        self._apply_proxy()
 
         year_min = self._safe_int(self.year_min_edit.text())
         year_max = self._safe_int(self.year_max_edit.text())
@@ -724,6 +738,7 @@ class MainWindow(QMainWindow):
 
         task = self.download_queue.pop(0)
         self.append_log(f"开始下载：{task.get('query') or task.get('result', {}).get('title')}")
+        self._apply_proxy()
         out_dir = self.dir_edit.text().strip() or str(Path.cwd() / "downloads")
         Path(out_dir).mkdir(parents=True, exist_ok=True)
 
