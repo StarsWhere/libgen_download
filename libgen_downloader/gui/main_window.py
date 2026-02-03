@@ -74,17 +74,24 @@ class MainWindow(QMainWindow):
         self.query_edit = QLineEdit()
         search_grid.addWidget(self.query_edit, 0, 1, 1, 3)
 
-        search_grid.addWidget(QLabel("语言:"), 0, 4)
+        search_grid.addWidget(QLabel("作者:"), 0, 4)
+        self.author_edit = QLineEdit()
+        self.author_edit.setPlaceholderText("作者名 / Author")
+        search_grid.addWidget(self.author_edit, 0, 5, 1, 2)
+        self.author_exact_cb = QCheckBox("精确")
+        search_grid.addWidget(self.author_exact_cb, 0, 7)
+
+        search_grid.addWidget(QLabel("语言:"), 1, 0)
         self.lang_edit = QLineEdit()
         self.lang_edit.setPlaceholderText("English / Chinese")
-        search_grid.addWidget(self.lang_edit, 0, 5)
+        search_grid.addWidget(self.lang_edit, 1, 1)
 
-        search_grid.addWidget(QLabel("格式:"), 0, 6)
+        search_grid.addWidget(QLabel("格式:"), 1, 2)
         self.ext_edit = QLineEdit()
         self.ext_edit.setPlaceholderText("pdf / epub")
-        search_grid.addWidget(self.ext_edit, 0, 7)
+        search_grid.addWidget(self.ext_edit, 1, 3)
 
-        search_grid.addWidget(QLabel("年份范围:"), 1, 0)
+        search_grid.addWidget(QLabel("年份范围:"), 1, 4)
         year_layout = QHBoxLayout()
         self.year_min_edit = QLineEdit()
         self.year_min_edit.setPlaceholderText("最小")
@@ -93,19 +100,19 @@ class MainWindow(QMainWindow):
         year_layout.addWidget(self.year_min_edit)
         year_layout.addWidget(QLabel("-"))
         year_layout.addWidget(self.year_max_edit)
-        search_grid.addLayout(year_layout, 1, 1)
+        search_grid.addLayout(year_layout, 1, 5, 1, 2)
 
-        search_grid.addWidget(QLabel("返回条数:"), 1, 2)
+        search_grid.addWidget(QLabel("返回条数:"), 2, 0)
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 200)
         self.limit_spin.setValue(25)
-        search_grid.addWidget(self.limit_spin, 1, 3)
+        search_grid.addWidget(self.limit_spin, 2, 1)
 
         self.search_btn = QPushButton("搜索")
         self.search_btn.setObjectName("search_btn")
         self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.search_btn.clicked.connect(self.start_search)
-        search_grid.addWidget(self.search_btn, 1, 4, 1, 4)
+        search_grid.addWidget(self.search_btn, 2, 2, 1, 6)
 
         search_group.setLayout(search_grid)
         layout.addWidget(search_group)
@@ -257,6 +264,8 @@ class MainWindow(QMainWindow):
         self.dir_edit.setText(self.settings.value("download_dir", str(Path.cwd() / "downloads")))
         self.lang_edit.setText(self.settings.value("last_lang", ""))
         self.ext_edit.setText(self.settings.value("last_ext", ""))
+        self.author_edit.setText(self.settings.value("last_author", ""))
+        self.author_exact_cb.setChecked(bool(int(self.settings.value("author_exact", 0))))
         self.proxy_edit.setText(self.settings.value("proxy_url", ""))
         self.notify_mode = self.settings.value("notify_mode", "toast_all")
         idx = self.notify_combo.findData(self.notify_mode)
@@ -270,6 +279,8 @@ class MainWindow(QMainWindow):
         self.settings.setValue("download_dir", self.dir_edit.text())
         self.settings.setValue("last_lang", self.lang_edit.text())
         self.settings.setValue("last_ext", self.ext_edit.text())
+        self.settings.setValue("last_author", self.author_edit.text())
+        self.settings.setValue("author_exact", 1 if self.author_exact_cb.isChecked() else 0)
         self.settings.setValue("proxy_url", self.proxy_edit.text())
         self.settings.setValue("notify_mode", self.notify_combo.currentData())
         self.settings.setValue("concurrent_downloads", self.concurrent_spin.value())
@@ -385,6 +396,8 @@ class MainWindow(QMainWindow):
             ext=self.ext_edit.text().strip() or None,
             year_min=year_min,
             year_max=year_max,
+            author=self.author_edit.text().strip() or None,
+            author_exact=self.author_exact_cb.isChecked(),
         )
         self.search_worker.moveToThread(self.search_thread)
         self.search_thread.started.connect(self.search_worker.run)
@@ -612,6 +625,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有可入队的任务")
             return
         for t in tasks:
+            t["author_exact"] = self.author_exact_cb.isChecked()
             t["queue_row"] = self._add_queue_row_from_query(t)
         self.download_queue.extend(tasks)
         self.queue_tasks.extend(tasks)

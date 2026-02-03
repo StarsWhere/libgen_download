@@ -34,10 +34,11 @@ pip install -e .
 - 带筛选：
   ```bash
   python -m libgen_downloader "Python 编程" --language Chinese --ext pdf --year-min 2010
+  python -m libgen_downloader "Python 编程" --author "张三" --author-exact
   ```
 - CSV 批量：
   ```bash
-  python -m libgen_downloader --csv books.csv --col-query 书名 --col-ext 类型
+  python -m libgen_downloader --csv books.csv --col-query 书名 --col-author 作者 --col-ext 类型
   ```
 
 ### GUI
@@ -45,10 +46,11 @@ pip install -e .
 python -m libgen_downloader.gui
 # 或安装后：libgen-gui
 ```
-GUI 支持搜索结果表、多选下载、并行队列、进度与日志、拖拽/导入 CSV & XLSX、Toast 提示、代理与并行/重试配置持久化。
+GUI 支持作者筛选（包含/精确）、搜索结果表、多选下载、并行队列、进度与日志、拖拽/导入 CSV & XLSX、Toast 提示、代理与并行/重试配置持久化。
 
 ## 参数速查（CLI 与 GUI 共享核心逻辑）
 - `--language` / `--ext` / `--year-min` / `--year-max`：精确过滤，若无结果自动逐步放宽（年份→格式→语言）。
+- `--author`：作者筛选（默认包含匹配，不区分大小写）；`--author-exact` 为精确匹配。
 - `--max-entry-urls`：每个条目最多尝试的镜像入口，默认 5。
 - `--max-fallback-results`：当首选结果失败时向后尝试的候选数，默认 3。
 - `--proxy`：HTTP/HTTPS 代理，也可通过环境变量 `LIBGEN_PROXY` 设置。

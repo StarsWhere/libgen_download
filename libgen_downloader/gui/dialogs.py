@@ -60,6 +60,7 @@ class CSVImportDialog(QDialog):
 
         map_grid = QGridLayout()
         self.combo_query = QComboBox()
+        self.combo_author = QComboBox()
         self.combo_lang = QComboBox()
         self.combo_ext = QComboBox()
         self.combo_year_min = QComboBox()
@@ -67,6 +68,7 @@ class CSVImportDialog(QDialog):
         for i, (label, combo) in enumerate(
             [
                 ("搜索关键词*", self.combo_query),
+                ("作者列", self.combo_author),
                 ("语言列", self.combo_lang),
                 ("格式列", self.combo_ext),
                 ("年份≥", self.combo_year_min),
@@ -242,7 +244,7 @@ class CSVImportDialog(QDialog):
         return headers, rows, parse_errors
 
     def _fill_combo_options(self):
-        combos = [self.combo_query, self.combo_lang, self.combo_ext, self.combo_year_min, self.combo_year_max]
+        combos = [self.combo_query, self.combo_author, self.combo_lang, self.combo_ext, self.combo_year_min, self.combo_year_max]
         for c in combos:
             c.clear()
             c.addItem("<未选择>")
@@ -258,6 +260,7 @@ class CSVImportDialog(QDialog):
                     return
 
         pick(self.combo_query, ["书名", "标题", "title", "name", "query"])
+        pick(self.combo_author, ["作者", "author", "authors"])
         pick(self.combo_lang, ["语言", "language", "lang"])
         pick(self.combo_ext, ["类型", "格式", "ext", "format"])
         pick(self.combo_year_min, ["年份", "year", "year_min", "year from"])
@@ -282,6 +285,7 @@ class CSVImportDialog(QDialog):
             return
 
         col_query = self.combo_query.currentText()
+        col_author = self.combo_author.currentText() if self.combo_author.currentIndex() > 0 else None
         col_lang = self.combo_lang.currentText() if self.combo_lang.currentIndex() > 0 else None
         col_ext = self.combo_ext.currentText() if self.combo_ext.currentIndex() > 0 else None
         col_ymin = self.combo_year_min.currentText() if self.combo_year_min.currentIndex() > 0 else None
@@ -297,6 +301,7 @@ class CSVImportDialog(QDialog):
                 if not query:
                     skipped += 1
                     continue
+                author = (row.get(col_author) or "").strip() if col_author else None
                 lang = (row.get(col_lang) or "").strip() if col_lang else None
                 ext = (row.get(col_ext) or "").strip() if col_ext else None
                 raw_ymin = row.get(col_ymin) if col_ymin else None
@@ -315,6 +320,7 @@ class CSVImportDialog(QDialog):
                     {
                         "type": "query",
                         "query": query,
+                        "author": author or None,
                         "language": lang or None,
                         "ext": ext or None,
                         "year_min": y_min,

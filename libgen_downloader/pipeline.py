@@ -16,6 +16,8 @@ def process_single_item(
     ext=None,
     year_min=None,
     year_max=None,
+    author=None,
+    author_exact: bool | None = None,
     logger=None,
     progress_cb=None,
     cancel_event: Event | None = None,
@@ -34,6 +36,8 @@ def process_single_item(
         ext=ext or args.ext,
         year_min=year_min or args.year_min,
         year_max=year_max or args.year_max,
+        author=author if author is not None else getattr(args, "author", None),
+        author_exact=author_exact if author_exact is not None else getattr(args, "author_exact", False),
         logger=logger,
     )
 

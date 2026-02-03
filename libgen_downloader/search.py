@@ -157,11 +157,21 @@ def parse_search_results(html: str, base_url: str = BASE_URL):
     return results
 
 
-def filter_results(results, language=None, ext=None, year_min=None, year_max=None):
+def filter_results(
+    results,
+    language=None,
+    ext=None,
+    year_min=None,
+    year_max=None,
+    author=None,
+    author_exact: bool = False,
+):
     """
     在本地对搜索结果做二次筛选。
     """
     filtered = []
+    author_keyword = (author or "").strip()
+    author_keyword_norm = _normalize_text(author_keyword) if author_keyword else ""
     for r in results:
         if language and (r.get("language") or "").lower() != language.lower():
             continue
@@ -177,6 +187,17 @@ def filter_results(results, language=None, ext=None, year_min=None, year_max=Non
                 continue
             if year_max is not None and y > year_max:
                 continue
+        if author_keyword_norm:
+            author_field = _normalize_text(r.get("author") or "")
+            if not author_field:
+                continue
+            if author_exact:
+                author_parts = [p.strip() for p in re.split(r"[;,/&|]+", author_field) if p.strip()]
+                if author_keyword_norm not in author_parts:
+                    continue
+            else:
+                if author_keyword_norm not in author_field:
+                    continue
         filtered.append(r)
     return filtered
 
@@ -194,6 +215,8 @@ def smart_search(
     ext=None,
     year_min=None,
     year_max=None,
+    author=None,
+    author_exact: bool = False,
     fallback_level: int = 0,
     logger=None,
 ):
@@ -206,7 +229,7 @@ def smart_search(
     3: 忽略语言限制
     """
     _log(
-        f"[*] 尝试搜索: '{query}' (Level {fallback_level}) | 语言={language}, 格式={ext}, 年份={year_min}-{year_max}",
+        f"[*] 尝试搜索: '{query}' (Level {fallback_level}) | 语言={language}, 格式={ext}, 年份={year_min}-{year_max}, 作者={author}",
         logger=logger,
     )
 
@@ -234,6 +257,8 @@ def smart_search(
         ext=ext,
         year_min=year_min,
         year_max=year_max,
+        author=author,
+        author_exact=author_exact,
     )
 
     if not filtered and fallback_level < 3:
@@ -252,6 +277,8 @@ def smart_search(
                 ext,
                 None,
                 None,
+                author,
+                author_exact,
                 fallback_level + 1,
                 logger=logger,
             )
@@ -269,6 +296,8 @@ def smart_search(
                 None,
                 None,
                 None,
+                author,
+                author_exact,
                 fallback_level + 2,
                 logger=logger,
             )
@@ -286,6 +315,8 @@ def smart_search(
                 None,
                 None,
                 None,
+                author,
+                author_exact,
                 fallback_level + 3,
                 logger=logger,
             )
@@ -301,3 +332,7 @@ def _log(message, level: str = "info", logger=None):
         except Exception:
             pass
     print(message)
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(str(text).lower().split())

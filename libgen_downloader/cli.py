@@ -18,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("query", nargs="?", help="搜索关键词（如果不使用 --csv）")
     parser.add_argument("--csv", help="CSV 文件路径，用于批量下载")
     parser.add_argument("--col-query", default="书名", help="CSV 中作为搜索关键词的列名，默认 '书名'")
+    parser.add_argument("--col-author", help="CSV 中作为作者筛选的列名")
     parser.add_argument("--col-language", help="CSV 中作为语言筛选的列名")
     parser.add_argument("--col-ext", default="类型", help="CSV 中作为扩展名筛选的列名，默认 '类型'")
     parser.add_argument("--col-year-min", help="CSV 中作为年份最小值的列名")
@@ -27,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--out-dir", default="downloads", help="文件保存目录，默认 ./downloads")
     parser.add_argument("--limit", type=int, default=25, help="搜索返回的最大条数（对应 res 参数），默认 25")
     parser.add_argument("--language", help="只保留指定语言的结果，例如 Chinese、English")
+    parser.add_argument("--author", help="作者筛选（默认包含匹配，不区分大小写）")
+    parser.add_argument("--author-exact", action="store_true", help="作者精确匹配（优先级高于包含匹配）")
     parser.add_argument("--ext", help="只保留指定扩展名的结果，例如 pdf、mobi（不区分大小写）")
     parser.add_argument("--year-min", type=int, help="筛选条件：年份 >= year_min")
     parser.add_argument("--year-max", type=int, help="筛选条件：年份 <= year_max")
@@ -92,6 +95,7 @@ def main():
                     continue
 
                 lang = row.get(args.col_language) if args.col_language else None
+                author = row.get(args.col_author) if args.col_author else None
                 ext = row.get(args.col_ext) if args.col_ext else None
 
                 y_min = None
@@ -110,7 +114,16 @@ def main():
 
                 print(f"\n{'='*40}")
                 print(f"[*] 正在处理: {query}")
-                process_single_item(query, args, language=lang, ext=ext, year_min=y_min, year_max=y_max)
+                process_single_item(
+                    query,
+                    args,
+                    language=lang,
+                    ext=ext,
+                    year_min=y_min,
+                    year_max=y_max,
+                    author=author,
+                    author_exact=args.author_exact,
+                )
     else:
         if not args.query:
             parser.print_help()

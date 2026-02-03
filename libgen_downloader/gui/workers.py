@@ -13,7 +13,7 @@ class SearchWorker(QObject):
     error = pyqtSignal(str)
     log = pyqtSignal(str, str)  # level, message
 
-    def __init__(self, query, limit, language, ext, year_min, year_max):
+    def __init__(self, query, limit, language, ext, year_min, year_max, author=None, author_exact=False):
         super().__init__()
         self.query = query
         self.limit = limit
@@ -21,6 +21,8 @@ class SearchWorker(QObject):
         self.ext = ext or None
         self.year_min = year_min
         self.year_max = year_max
+        self.author = author or None
+        self.author_exact = author_exact
 
     def run(self):
         def logger(level, message):
@@ -34,6 +36,8 @@ class SearchWorker(QObject):
                 ext=self.ext,
                 year_min=self.year_min,
                 year_max=self.year_max,
+                author=self.author,
+                author_exact=self.author_exact,
                 logger=logger,
             )
             self.finished.emit(results)
@@ -140,6 +144,8 @@ class TaskWorker(QObject):
             ext=self.task.get("ext"),
             year_min=self.task.get("year_min"),
             year_max=self.task.get("year_max"),
+            author=self.task.get("author"),
+            author_exact=self.task.get("author_exact", False),
             logger=logger,
         )
         return res[0] if res else None
