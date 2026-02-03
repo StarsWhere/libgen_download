@@ -1,8 +1,8 @@
-from .main_window import MainWindow, main
-from .style import DARK_QSS
-from .dialogs import CSVImportDialog
-from .toast import ToastNotification
-from .workers import SearchWorker, TaskWorker, DownloadWorker
+from libgen_downloader.gui.main_window import MainWindow, main  # noqa: F401
+from libgen_downloader.gui.style import DARK_QSS  # noqa: F401
+from libgen_downloader.gui.dialogs import CSVImportDialog  # noqa: F401
+from libgen_downloader.gui.toast import ToastNotification  # noqa: F401
+from libgen_downloader.gui.workers import SearchWorker, TaskWorker, DownloadWorker  # noqa: F401
 
 __all__ = [
     "MainWindow",
