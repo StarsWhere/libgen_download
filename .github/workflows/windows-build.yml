@@ -53,17 +53,12 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --windowed --onefile --name libgen-gui libgen_gui.py
 
-      - name: Generate SHA256
-        run: |
-          Get-FileHash dist/libgen-gui.exe -Algorithm SHA256 | Select-Object Hash | ForEach-Object { $_.Hash } > dist/libgen-gui.exe.sha256
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: libgen-gui-windows
           path: |
             dist/libgen-gui.exe
-            dist/libgen-gui.exe.sha256
           if-no-files-found: error
 
       - name: Publish release asset
@@ -73,14 +68,12 @@ jobs:
           tag_name: ${{ steps.get_version.outputs.NEW_TAG || github.ref_name }}
           files: |
             dist/libgen-gui.exe
-            dist/libgen-gui.exe.sha256
           name: libgen-gui-${{ steps.get_version.outputs.NEW_TAG || github.ref_name }}
           body: |
             Windows GUI 单文件可执行程序。
             自动构建版本：${{ steps.get_version.outputs.NEW_TAG || github.ref_name }}
 
             - 可执行文件：libgen-gui.exe
-            - 校验：见 libgen-gui.exe.sha256
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
