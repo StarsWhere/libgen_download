@@ -1,105 +1,62 @@
-# Libgen 智能批量下载工具 (Libgen Download Script)
+# Libgen 智能批量下载工具 (Libgen Downloader)
 
-这是一个功能强大的 Python 脚本，旨在从 Libgen 镜像站高效地搜索并下载图书。它不仅支持单本搜索，还支持通过 CSV 文件进行大规模批量下载，并具备智能的搜索回退机制和多镜像容错能力。
+基于标准化架构的 Libgen 搜索/下载器，提供 CLI 与 PyQt6 GUI，支持批量导入、智能回退与多镜像重试。
 
-## 核心特性
-
-- **多模式搜索**：支持直接关键词搜索或通过 CSV 文件批量导入任务。
-- **智能回退机制 (Smart Fallback)**：当严格筛选（语言、格式、年份）无结果时，脚本会自动逐步放宽条件（先忽略年份，再忽略格式，最后忽略语言）以寻找最接近的资源。
-- **高成功率下载**：
-  - **多镜像支持**：自动解析并尝试多个镜像源（ads_url 及其他 mirrors）。
-  - **自动重试**：针对网络波动或服务器临时错误提供自动重试机制。
-  - **智能解析**：能够从复杂的镜像页面中精准提取最终下载链接。
-- **文件名规范化**：
-  - 自动提取 `书名-作者-出版社-年份-语言-页数` 构建文件名。
-  - 自动清理 Windows/Linux 非法字符。
-  - 自动移除标题中的冗余推广信息。
-- **高度可定制**：支持自定义搜索字段（标题、作者、ISBN等）、搜索对象（书籍、期刊等）以及排序方式。
-- **代理支持**：内置 HTTP/HTTPS 代理配置，解决网络访问限制。
-
-## 安装指南
-
-### 1. 克隆或下载本仓库
-确保您的系统中已安装 Python 3.6+。
-
-### 2. 安装依赖
-```bash
-pip install -r requirements.txt
+## 目录结构
 ```
-主要依赖库：
-- `requests`: 处理网络请求。
-- `beautifulsoup4`: 解析 HTML 页面。
-- `PyQt6`: 图形界面（仅 GUI 版需要）。
-
-### 3. 启动图形界面（可选）
-```bash
-python libgen_gui.py
-```
-GUI 版提供搜索表单、结果表格、多选下载、下载队列、进度条与日志视图，并将任务放到后台线程，确保界面流畅。支持拖拽或按钮导入 CSV/XLSX，预览前 100 行并映射列（关键词/语言/格式/年份），验证后可批量入队下载；无法解析的行会被自动忽略并计数提示。
-
-## 快速上手
-
-### 1. 基础搜索下载
-搜索并下载匹配度最高的第一条结果：
-```bash
-python libgen_download.py "深入理解计算机系统"
+libgen_downloader/
+  ├── config.py          # 全局配置与 Session/代理
+  ├── search.py          # 搜索、解析、智能回退
+  ├── download.py        # 链接解析、重试下载、文件名规范化
+  ├── pipeline.py        # 单任务编排（搜索+下载）
+  ├── cli.py             # CLI 入口
+  └── gui/               # GUI 组件、线程、样式
+pyproject.toml            # 打包/脚本入口
+libgen_download.py        # 兼容旧入口（委托到新包）
+libgen_gui.py             # 兼容旧 GUI 入口
 ```
 
-### 2. 带筛选条件的搜索
-只下载中文、PDF 格式、2010年以后的资源：
+## 安装
 ```bash
-python libgen_download.py "Python 编程" --language Chinese --ext pdf --year-min 2010
+python -m pip install -r requirements.txt
+# 或使用项目脚本名（需本地可编辑安装）
+pip install -e .
 ```
+运行环境：Python 3.9+，依赖 `requests`, `beautifulsoup4`, `PyQt6`, `openpyxl`。
 
-### 3. CSV 批量下载（CLI）
-准备一个 CSV 文件（如 `books.csv`），包含“书名”和“类型”列：
+## 使用
+### CLI
+- 基础搜索下载：
+  ```bash
+  python -m libgen_downloader "深入理解计算机系统"
+  # 等价：libgen-cli "深入理解计算机系统"  (pip -e 安装后)
+  ```
+- 带筛选：
+  ```bash
+  python -m libgen_downloader "Python 编程" --language Chinese --ext pdf --year-min 2010
+  ```
+- CSV 批量：
+  ```bash
+  python -m libgen_downloader --csv books.csv --col-query 书名 --col-ext 类型
+  ```
+
+### GUI
 ```bash
-python libgen_download.py --csv books.csv --col-query 书名 --col-ext 类型
+python -m libgen_downloader.gui
+# 或安装后：libgen-gui
 ```
-> 提示：GUI 已支持 CSV/XLSX 导入；命令行模式目前仅支持 CSV。
+GUI 支持搜索结果表、多选下载、并行队列、进度与日志、拖拽/导入 CSV & XLSX、Toast 提示、代理与并行/重试配置持久化。
 
-## 完整参数说明
+## 参数速查（CLI 与 GUI 共享核心逻辑）
+- `--language` / `--ext` / `--year-min` / `--year-max`：精确过滤，若无结果自动逐步放宽（年份→格式→语言）。
+- `--max-entry-urls`：每个条目最多尝试的镜像入口，默认 5。
+- `--max-fallback-results`：当首选结果失败时向后尝试的候选数，默认 3。
+- `--proxy`：HTTP/HTTPS 代理，也可通过环境变量 `LIBGEN_PROXY` 设置。
+- `--columns/--objects/--topics/--order/--ordermode/--filesuns`：原生 Libgen 搜索参数直通。
 
-### 基础参数
-| 参数 | 缩写 | 描述 | 默认值 |
-| :--- | :--- | :--- | :--- |
-| `query` | - | 搜索关键词（不使用 --csv 时必填） | - |
-| `--out-dir` | `-o` | 文件保存目录 | `downloads` |
-| `--proxy` | - | 设置代理 (如 `http://127.0.0.1:7890`) | - |
-
-### 筛选与搜索控制
-| 参数 | 描述 | 默认值 |
-| :--- | :--- | :--- |
-| `--index` / `-n` | 优先尝试下载搜索结果中的第几条（从0开始） | `0` |
-| `--limit` | 搜索请求返回的最大条数 | `25` |
-| `--language` | 筛选特定语言（如 `Chinese`, `English`） | - |
-| `--ext` | 筛选特定扩展名（如 `pdf`, `epub`, `mobi`） | - |
-| `--year-min` | 筛选年份下限 | - |
-| `--year-max` | 筛选年份上限 | - |
-| `--max-fallback-results` | 当首选结果下载失败时，最多尝试多少个其他结果 | `3` |
-
-### CSV 批量模式参数
-| 参数 | 描述 | 默认值 |
-| :--- | :--- | :--- |
-| `--csv` | CSV 文件路径 | - |
-| `--col-query` | CSV 中作为搜索关键词的列名 | `书名` |
-| `--col-ext` | CSV 中作为扩展名筛选的列名 | `类型` |
-| `--col-language` | CSV 中作为语言筛选的列名 | - |
-| `--col-year-min` | CSV 中作为年份最小值的列名 | - |
-| `--col-year-max` | CSV 中作为年份最大值的列名 | - |
-
-### 进阶搜索参数 (Libgen 原生参数)
-- `--columns`: 自定义搜索字段（`t`标题, `a`作者, `s`系列, `y`年份, `p`出版社, `i`ISBN）。
-- `--topics`: 搜索主题（`l`图书馆, `c`漫画, `f`小说, `a`文章等）。
-- `--order`: 排序字段（`year`, `filesize`, `title` 等）。
-- `--ordermode`: 排序顺序（`asc`, `desc`）。
-
-## 注意事项
-- **域名配置**：脚本默认使用 `https://libgen.vg`。如果该域名失效，请在 [`libgen_download.py`](libgen_download.py:13) 中修改 `BASE_URL`。
-- **文件名长度**：脚本会自动截断过长的文件名以适应系统限制。
-
-## 免责声明
-本工具仅供学习和研究使用。请在使用时遵守当地法律法规，尊重版权所有者的合法权益。
+## 注意
+- 默认主站 `https://libgen.vg`，可通过环境变量 `LIBGEN_BASE_URL` 覆盖。
+- 文件名会自动清理非法字符并在 150 字符内截断。
 
 ## 许可证
-本项目采用 [MIT License](LICENSE) 开源。
+MIT License，详见 [LICENSE](LICENSE)。

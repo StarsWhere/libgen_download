@@ -51,7 +51,7 @@ jobs:
 
       - name: Build GUI executable
         run: |
-          python -m PyInstaller --noconfirm --windowed --onefile --name libgen-gui libgen_gui.py
+          python -m PyInstaller --noconfirm --windowed --onefile --name libgen-gui libgen_downloader\\gui\\__main__.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

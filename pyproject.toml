@@ -1,0 +1,22 @@
+[project]
+name = "libgen-downloader"
+version = "0.1.0"
+description = "Search and download books from Libgen via CLI/GUI with smart fallback."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Roo", email = "root@example.com" }]
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "PyQt6",
+    "openpyxl",
+]
+
+[project.scripts]
+libgen-cli = "libgen_downloader.cli:main"
+libgen-gui = "libgen_downloader.gui.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
