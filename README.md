@@ -1,5 +1,31 @@
 # Libgen 智能批量下载工具 (Libgen Downloader)
 
+<!-- starswhere-docs-overview -->
+
+## 项目概览
+
+**定位**：面向 Library Genesis 的搜索下载工具，包含命令行、图形界面、下载管线和错误处理封装。
+
+**核心功能**：
+- 支持关键词搜索和下载流程
+- 提供 CLI 与 GUI 两种入口
+- 封装配置、搜索、下载和错误模型
+- 包含 Windows 打包工作流
+
+**技术栈**：Python、GUI 框架、HTTP 下载、GitHub Actions；Python 环境建议使用 uv。
+
+**目录与模块**：`libgen_downloader/` 是核心包；`libgen_download.py` 与 `libgen_gui.py` 是入口脚本；`libgen_downloader/gui` 保存图形界面；`.github/workflows` 提供构建配置。
+
+**使用方式**：使用 `uv` 根据 `pyproject.toml` 或 `requirements.txt` 准备环境，然后选择 CLI 或 GUI 入口。
+
+**配置说明**：配置逻辑在 `libgen_downloader/config.py`，下载流程由 pipeline 组织。
+
+**适用场景**：适合个人资料检索、下载流程自动化和 Python GUI/CLI 双入口项目参考。
+
+**注意事项**：使用第三方资源时需遵守当地法律、版权要求和目标站点规则。
+
+<!-- /starswhere-docs-overview -->
+
 基于标准化架构的 Libgen 搜索/下载器，提供 CLI 与 PyQt6 GUI，支持批量导入、智能回退与多镜像重试。
 
 ## 目录结构
